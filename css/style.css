@@ -1,0 +1,350 @@
+/* ============================================================
+   Base reset & layout
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: #e6edf3;
+  overflow: hidden;
+}
+
+#map {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* ============================================================
+   Floating header
+   ============================================================ */
+#header {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(13, 17, 23, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 12px 18px;
+  max-width: 340px;
+  pointer-events: none;
+}
+
+.header-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.header-text h1 {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: #f0f6fc;
+}
+
+.header-text p {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 2px;
+}
+
+/* ============================================================
+   Info panel (hover details)
+   ============================================================ */
+#info-panel {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 1000;
+  background: rgba(13, 17, 23, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 14px 18px;
+  min-width: 220px;
+  max-width: 300px;
+  transition: opacity 0.2s;
+}
+
+#info-panel.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#info-content h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f0f6fc;
+  margin-bottom: 6px;
+}
+
+#info-content .iso-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+#info-content .info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #8b949e;
+  margin-top: 3px;
+}
+
+#info-content .info-row span:last-child {
+  color: #c9d1d9;
+  font-weight: 500;
+}
+
+/* ============================================================
+   Custom Leaflet controls styling
+   ============================================================ */
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.leaflet-control-zoom a {
+  background: rgba(13, 17, 23, 0.88) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  color: #c9d1d9 !important;
+  border-radius: 8px !important;
+  margin-bottom: 4px !important;
+  font-size: 16px !important;
+  line-height: 28px !important;
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: rgba(30, 40, 55, 0.95) !important;
+  color: #f0f6fc !important;
+}
+
+.leaflet-bar a:first-child { border-radius: 8px !important; }
+.leaflet-bar a:last-child  { border-radius: 8px !important; }
+
+/* ============================================================
+   Leaflet layer control
+   ============================================================ */
+.leaflet-control-layers {
+  background: rgba(13, 17, 23, 0.88) !important;
+  backdrop-filter: blur(8px) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  border-radius: 12px !important;
+  color: #c9d1d9 !important;
+  box-shadow: none !important;
+  min-width: 190px;
+}
+
+.leaflet-control-layers-expanded {
+  padding: 12px 16px !important;
+}
+
+.leaflet-control-layers-toggle {
+  background-image: none !important;
+  font-size: 16px !important;
+  width: 36px !important;
+  height: 36px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.leaflet-control-layers-toggle::before {
+  content: '🗂';
+  font-size: 18px;
+}
+
+.leaflet-control-layers-base,
+.leaflet-control-layers-overlays {
+  font-size: 12px !important;
+}
+
+.leaflet-control-layers label {
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.leaflet-control-layers input {
+  margin-right: 6px;
+  accent-color: #58a6ff;
+}
+
+/* Section heading inside layer control */
+.layer-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6e7681;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-top: 8px;
+  margin-bottom: 2px;
+}
+
+/* ============================================================
+   Legend Leaflet control
+   ============================================================ */
+.legend-panel {
+  background: rgba(13, 17, 23, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 14px 18px;
+  font-size: 11px;
+  color: #c9d1d9;
+  max-width: 220px;
+}
+
+.legend-panel h4 {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6e7681;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-top: 10px;
+  margin-bottom: 5px;
+}
+
+.legend-panel h4:first-child { margin-top: 0; }
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.legend-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+.legend-line-sample {
+  width: 28px;
+  height: 0;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Tooltips & popups
+   ============================================================ */
+.leaflet-tooltip {
+  background: rgba(13, 17, 23, 0.92) !important;
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  border-radius: 8px !important;
+  color: #e6edf3 !important;
+  font-size: 12px !important;
+  padding: 6px 10px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+
+.leaflet-tooltip-top::before {
+  border-top-color: rgba(255,255,255,0.15) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: rgba(13, 17, 23, 0.96) !important;
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  border-radius: 12px !important;
+  color: #e6edf3 !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important;
+}
+
+.leaflet-popup-tip {
+  background: rgba(13, 17, 23, 0.96) !important;
+}
+
+.leaflet-popup-close-button {
+  color: #6e7681 !important;
+  font-size: 18px !important;
+}
+
+/* Popup content */
+.popup-header {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f0f6fc;
+  margin-bottom: 4px;
+}
+
+.popup-sub {
+  font-size: 11px;
+  color: #8b949e;
+  margin-bottom: 12px;
+}
+
+.popup-pie-container {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.popup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.popup-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.popup-table td:last-child { text-align: right; color: #8b949e; }
+.popup-table td:first-child { padding-left: 0; }
+
+.fuel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.popup-source {
+  font-size: 10px;
+  color: #484f58;
+  margin-top: 8px;
+}
+
+/* ============================================================
+   Generation marker icon
+   ============================================================ */
+.gen-marker-icon {
+  cursor: pointer;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7));
+}
+
+/* ============================================================
+   Responsive: collapse legend on mobile
+   ============================================================ */
+@media (max-width: 600px) {
+  #header { max-width: calc(100vw - 80px); }
+  .legend-panel { max-width: 170px; font-size: 10px; }
+  .legend-swatch { width: 12px; height: 12px; }
+}
