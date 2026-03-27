@@ -58,7 +58,7 @@ body {
    ============================================================ */
 #info-panel {
   position: fixed;
-  bottom: 16px;
+  top: 92px;
   left: 16px;
   z-index: 1000;
   background: rgba(13, 17, 23, 0.92);
@@ -181,6 +181,10 @@ body {
   accent-color: #58a6ff;
 }
 
+.leaflet-bottom .leaflet-left .leaflet-control {
+  margin-bottom: 12px;
+}
+
 /* Section heading inside layer control */
 .layer-section-title {
   font-size: 10px;
@@ -248,6 +252,118 @@ body {
   flex-shrink: 0;
 }
 
+.generator-filter-panel {
+  background: rgba(13, 17, 23, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  color: #c9d1d9;
+  padding: 12px 14px;
+  width: 260px;
+  box-shadow: none;
+}
+
+.generator-filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.generator-filter-header h4,
+.generator-filter-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6e7681;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.generator-filter-toggle,
+.generator-filter-actions button {
+  background: rgba(255,255,255,0.06);
+  color: #c9d1d9;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  font-size: 11px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.generator-filter-toggle:hover,
+.generator-filter-actions button:hover {
+  background: rgba(88,166,255,0.14);
+  color: #f0f6fc;
+}
+
+.generator-filter-body {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.generator-filter-panel.is-collapsed .generator-filter-body {
+  display: none;
+}
+
+.generator-filter-summary {
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.generator-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.generator-filter-group {
+  display: grid;
+  gap: 6px;
+}
+
+.generator-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.generator-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #c9d1d9;
+  cursor: pointer;
+}
+
+.generator-filter-option input {
+  margin: 0;
+  accent-color: #58a6ff;
+}
+
+.generator-filter-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.generator-filter-range label {
+  display: grid;
+  gap: 4px;
+  font-size: 10px;
+  color: #8b949e;
+}
+
+.generator-filter-range input {
+  width: 100%;
+  background: rgba(255,255,255,0.04);
+  color: #f0f6fc;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
 /* ============================================================
    Tooltips & popups
    ============================================================ */
@@ -296,6 +412,33 @@ body {
   margin-bottom: 12px;
 }
 
+.popup-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.popup-link-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(88,166,255,0.12);
+  border: 1px solid rgba(88,166,255,0.24);
+  color: #cfe8ff;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.popup-link-chip:hover {
+  background: rgba(88,166,255,0.18);
+  color: #f0f6fc;
+}
+
 .popup-pie-container {
   display: flex;
   align-items: center;
@@ -332,6 +475,31 @@ body {
   margin-top: 8px;
 }
 
+.popup-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6e7681;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-top: 12px;
+  margin-bottom: 6px;
+}
+
+.popup-tech-list {
+  display: grid;
+  gap: 4px;
+}
+
+.popup-scroll {
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.popup-generator-table td {
+  vertical-align: top;
+}
+
 /* ============================================================
    Generation marker icon
    ============================================================ */
@@ -340,11 +508,40 @@ body {
   filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7));
 }
 
+.generator-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cluster-color) 78%, rgba(13, 17, 23, 0.92));
+  border: 2px solid rgba(13, 17, 23, 0.92);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+}
+
+.generator-cluster-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: #f0f6fc;
+  line-height: 1;
+}
+
 /* ============================================================
    Responsive: collapse legend on mobile
    ============================================================ */
 @media (max-width: 600px) {
   #header { max-width: calc(100vw - 80px); }
+  #info-panel {
+    top: auto;
+    bottom: 110px;
+    max-width: calc(100vw - 32px);
+  }
   .legend-panel { max-width: 170px; font-size: 10px; }
   .legend-swatch { width: 12px; height: 12px; }
+  .generator-filter-panel {
+    width: min(240px, calc(100vw - 32px));
+  }
+  .generator-filter-grid,
+  .generator-filter-range {
+    grid-template-columns: 1fr;
+  }
 }
