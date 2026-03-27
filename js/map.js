@@ -28,8 +28,8 @@
 
   L.control.zoom({ position: 'topright' }).addTo(map);
 
-  // Dark no-labels tile layer (labels come from our overlays)
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+  // Dark tile layer with labels so geographic context is visible
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
     subdomains: 'abcd',
     maxZoom: 20
@@ -74,10 +74,10 @@
       width="${sizePx}" height="${sizePx}"
       viewBox="0 0 ${viewSize} ${viewSize}">
       <!-- background circle -->
-      <circle cx="${cx}" cy="${cy}" r="${R + 16}" fill="rgba(13,17,23,0.75)" stroke="#30363d" stroke-width="1"/>
+      <circle cx="${cx}" cy="${cy}" r="32" fill="rgba(13,17,23,0.75)" stroke="#555" stroke-width="1.5"/>
       ${segments}
-      <!-- centre hole -->
-      <circle cx="${cx}" cy="${cy}" r="${R - 16}" fill="rgba(13,17,23,0.90)"/>
+      <!-- centre hole (covers inner part of stroked arcs) -->
+      <circle cx="${cx}" cy="${cy}" r="10" fill="rgba(13,17,23,0.92)"/>
       <!-- GW label -->
       <text x="${cx}" y="${cy - 3}" text-anchor="middle" font-size="10" fill="#f0f6fc" font-weight="700" font-family="sans-serif">${displayGw}</text>
       <text x="${cx}" y="${cy + 8}" text-anchor="middle" font-size="6" fill="#8b949e" font-family="sans-serif">avg GW</text>
@@ -169,10 +169,6 @@
 
     const geojson = topojson.feature(topology, topology.objects.states);
 
-    // State mesh (borders) rendered separately for crisp edges
-    const meshGeojson = topojson.mesh(topology, topology.objects.states,
-      (a, b) => a !== b);
-
     L.geoJSON(geojson, {
       style: feature => {
         const fips = parseInt(feature.id, 10);
@@ -180,9 +176,10 @@
         const region = ISO_REGIONS[isoKey] || ISO_REGIONS.OTHER;
         return {
           fillColor: region.color,
-          fillOpacity: 0.28,
-          color: 'transparent',
-          weight: 0
+          fillOpacity: 0.35,
+          color: '#ffffff',
+          weight: 1.0,
+          opacity: 0.5
         };
       },
       onEachFeature: (feature, layer) => {
@@ -198,11 +195,11 @@
 
         layer.on({
           mouseover(e) {
-            e.target.setStyle({ fillOpacity: 0.55 });
+            e.target.setStyle({ fillOpacity: 0.60, color: '#ffffff', weight: 1.8, opacity: 0.9 });
             showInfo(stateName, isoKey);
           },
           mouseout(e) {
-            e.target.setStyle({ fillOpacity: 0.28 });
+            e.target.setStyle({ fillOpacity: 0.35, color: '#ffffff', weight: 1.0, opacity: 0.5 });
             hideInfo();
           },
           click(e) {
@@ -215,16 +212,6 @@
             }
           }
         });
-      }
-    }).addTo(layerRegions);
-
-    // State border overlay
-    L.geoJSON(meshGeojson, {
-      style: {
-        color: '#30363d',
-        weight: 0.8,
-        opacity: 0.8,
-        fill: false
       }
     }).addTo(layerRegions);
   }
