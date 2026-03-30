@@ -1858,7 +1858,6 @@
           </div>
           <div class="generator-filter-body">
             <div class="generator-summary-section hidden" data-generator-summary-section>
-              <div class="generator-summary-title">Visible Nameplate MW</div>
               <div class="generator-summary-content" data-generator-summary-content>Loading visible generator summary...</div>
             </div>
             <div class="generator-filter-summary" data-filter-summary></div>
