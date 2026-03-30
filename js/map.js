@@ -1,13 +1,14 @@
 /* ============================================================
    map.js - US Power System Map
    Depends on: Leaflet, TopoJSON client, data.js globals,
-   generator_data_2024.js globals
+   generator_data_2024.js globals, planned_generator_queue_2024.js globals
    ============================================================ */
 
 (function () {
   'use strict';
 
   const US_ATLAS_URL = 'https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json';
+  const US_COUNTIES_ATLAS_URL = 'https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json';
   const EIA_930_BASE_URL = 'https://www.eia.gov/electricity/930-api';
   const GENERATOR_CLUSTER_MAX_ZOOM = 7;
   const DAILY_MIX_REFRESH_MS = 60 * 60 * 1000;
@@ -58,6 +59,7 @@
   };
 
   const generatorDataset = window.GENERATOR_PLANT_DATA || { source: null, plants: [] };
+  const plannedGeneratorDataset = window.PLANNED_GENERATOR_QUEUE_DATA || { source: null, counties: [] };
 
   function canonicalizeGeneratorTechnologyLabel(technology) {
     const label = String(technology || '').trim();
@@ -136,12 +138,15 @@
     };
   });
   const generatorTypeOptions = Object.keys(GENERATOR_FUEL_STYLES);
-  const generatorMaxNameplateMw = Math.max(
-    100,
-    Math.ceil(
-      generatorPlants.reduce((max, plant) => Math.max(max, Number(plant.nmw) || 0), 0) / 100
-    ) * 100
-  );
+  const generatorMaxNameplateMw = 7000;
+  const plannedGeneratorCounties = (plannedGeneratorDataset.counties || []).map((county) => {
+    const dominantTech = canonicalizeGeneratorTechnologyLabel(Object.keys(county.tech || {})[0] || 'Other');
+    return {
+      ...county,
+      dominantTech,
+      dominantFuel: normalizeGeneratorTechnology(dominantTech)
+    };
+  });
 
   const map = L.map('map', {
     center: [39.5, -97.5],
@@ -163,20 +168,42 @@
 
   const layerRegions = L.layerGroup().addTo(map);
   const layerTransmission = L.layerGroup().addTo(map);
+  const layerHifldTransmission = L.layerGroup().addTo(layerTransmission);
   const layerGeneration = L.layerGroup();
   const layerGenerators = L.layerGroup().addTo(map);
+  const layerPlannedGenerators = L.layerGroup();
+  const HIFLD_TRANSMISSION_CHUNKS = [
+    'data/transmission_lines/Transmission_Lines_20250824_021843_chunk0000.geojson.gz',
+    'data/transmission_lines/Transmission_Lines_20250824_021843_chunk0001.geojson.gz',
+    'data/transmission_lines/Transmission_Lines_20250824_021843_chunk0002.geojson.gz',
+    'data/transmission_lines/Transmission_Lines_20250824_021843_chunk0003.geojson.gz',
+    'data/transmission_lines/Transmission_Lines_20250824_021843_chunk0004.geojson.gz'
+  ];
 
   let generationLegendDate = 'loading latest previous-day EIA data';
   let generationLegendNote = 'Source: EIA Grid Monitor daily fuel mix';
   let generationDataState = 'loading';
   let generationDataDateKey = null;
   let generationRefreshHandle = null;
+  let hifldTransmissionLoaded = false;
+  let hifldTransmissionLoadPromise = null;
+  let hifldTransmissionFeatures = [];
+  let countyCentroidsByFips = null;
+  let countyCentroidsLoadPromise = null;
+  let legendControlRef = null;
   let layerControlRef = null;
   let generatorFilterControlRef = null;
   let generatorFilterState = {
     types: new Set(generatorTypeOptions),
     minMw: 0,
     maxMw: generatorMaxNameplateMw
+  };
+  const LAYER_CONTROL_IDS = {
+    regions: 'regions',
+    transmission: 'transmission',
+    generation: 'generation',
+    generators: 'generators',
+    plannedGenerators: 'planned-generators'
   };
 
   function buildPieSvg(mix, sizePx, centerValue, centerSubLabel) {
@@ -241,12 +268,56 @@
     return `Generation Mix - ${generationLegendDate}`;
   }
 
-  function updateGenerationLayerLabel() {
+  function buildLayerControlLabel(id, text) {
+    return `<span data-layer-label="${escapeHtml(id)}">${escapeHtml(text)}</span>`;
+  }
+
+  function getLayerSourceNote(id) {
+    if (id === LAYER_CONTROL_IDS.regions) {
+      return 'Source: US Atlas TopoJSON (Census TIGER) state boundaries; ISO/RTO mapping is approximate from NERC and ISO/RTO maps.';
+    }
+
+    if (id === LAYER_CONTROL_IDS.transmission) {
+      return 'Sources: simplified major corridors from FERC/NERC public maps plus HIFLD transmission lines, with HIFLD zoom-filtered and grouped for performance.';
+    }
+
+    if (id === LAYER_CONTROL_IDS.generators) {
+      return generatorDataset.source
+        ? `Source: ${generatorDataset.source.name} ${generatorDataset.source.release}.`
+        : 'Source: EIA Form 860 detailed data, final 2024 release.';
+    }
+
+    if (id === LAYER_CONTROL_IDS.plannedGenerators) {
+      return plannedGeneratorDataset.source
+        ? `Source: ${plannedGeneratorDataset.source.name} ${plannedGeneratorDataset.source.release}. ${plannedGeneratorDataset.source.notes || ''}`.trim()
+        : 'Source: interconnection queue data compiled from official ISO/RTO and utility queue sources.';
+    }
+
+    if (id === LAYER_CONTROL_IDS.generation) {
+      return generationLegendNote;
+    }
+
+    return '';
+  }
+
+  function updateLayerControlLabel(id, text) {
     if (!layerControlRef) return;
-    const labelNode = layerControlRef.querySelector('[data-layer-label="generation"]');
+    const labelNode = layerControlRef.querySelector(`[data-layer-label="${id}"]`);
     if (!labelNode) return;
-    labelNode.textContent = getGenerationLayerLabelText();
-    labelNode.title = generationLegendNote;
+    if (typeof text === 'string') {
+      labelNode.textContent = text;
+    }
+    labelNode.title = getLayerSourceNote(id);
+  }
+
+  function updateGenerationLayerLabel() {
+    updateLayerControlLabel(LAYER_CONTROL_IDS.generation, getGenerationLayerLabelText());
+  }
+
+  function updateLayerControlTitles() {
+    Object.values(LAYER_CONTROL_IDS).forEach((id) => {
+      updateLayerControlLabel(id);
+    });
   }
 
   function clampGeneratorFilterRange(minMw, maxMw) {
@@ -439,8 +510,26 @@
     const total = Object.values(genData.mix).reduce((sum, value) => sum + value, 0);
     const avgGw = total / 24 / 1000;
     const base = 72;
-    const scale = Math.sqrt(Math.max(total, 1) / 380000);
-    const sizePx = Math.max(66, Math.min(132, Math.round(base * scale)));
+    const zoom = map.getZoom();
+    const zoomScale = zoom <= 4
+      ? 1
+      : zoom === 5
+        ? 1.1
+        : zoom === 6
+          ? 1.22
+          : zoom === 7
+            ? 1.36
+            : zoom === 8
+              ? 1.52
+              : zoom === 9
+                ? 1.7
+                : zoom === 10
+                  ? 1.9
+                  : zoom === 11
+                    ? 2.1
+                    : 2.3;
+    const scale = Math.sqrt(Math.max(total, 1) / 380000) * zoomScale;
+    const sizePx = Math.max(66, Math.min(210, Math.round(base * scale)));
     const svg = buildPieSvg(genData.mix, sizePx, avgGw.toFixed(1), 'avg GW');
 
     return L.divIcon({
@@ -669,15 +758,6 @@
           mouseout(event) {
             event.target.setStyle({ fillOpacity: 0.35, color: '#ffffff', weight: 1.0, opacity: 0.5 });
             hideInfo();
-          },
-          click(event) {
-            const gen = regionGenerationMix[isoKey];
-            if (!gen) return;
-
-            L.popup({ maxWidth: 340 })
-              .setLatLng(event.latlng)
-              .setContent(buildDailyGenerationPopup(isoKey, gen))
-              .openOn(map);
           }
         });
       }
@@ -713,13 +793,246 @@
     }).addTo(layerTransmission);
   }
 
+  function getHifldTransmissionStyle(feature) {
+    const voltage = Number(feature?.properties?.VOLTAGE);
+    const type = String(feature?.properties?.TYPE || '').toUpperCase();
+    const dashArray = type === 'UNDERGROUND' ? '4 4' : null;
+
+    if (Number.isFinite(voltage) && voltage >= 700) {
+      return { ...TRANSMISSION_STYLES[765], weight: 2.6, opacity: 0.6, dashArray };
+    }
+
+    if (Number.isFinite(voltage) && voltage >= 500) {
+      return { ...TRANSMISSION_STYLES[500], weight: 2.1, opacity: 0.5, dashArray };
+    }
+
+    if (Number.isFinite(voltage) && voltage >= 300) {
+      return { ...TRANSMISSION_STYLES[345], weight: 1.5, opacity: 0.42, dashArray };
+    }
+
+    return { color: '#8ecae6', weight: 1.1, opacity: 0.3, dashArray };
+  }
+
+  function getHifldVoltageBucket(feature) {
+    const voltage = Number(feature?.properties?.VOLTAGE);
+    if (Number.isFinite(voltage) && voltage >= 700) return '765';
+    if (Number.isFinite(voltage) && voltage >= 500) return '500';
+    if (Number.isFinite(voltage) && voltage >= 300) return '345';
+    return 'other';
+  }
+
+  function hifldMinVoltageForZoom(zoom) {
+    if (zoom <= 4) return 500;
+    if (zoom <= 5) return 345;
+    if (zoom <= 7) return 230;
+    return 0;
+  }
+
+  function hifldClusterCellSize(zoom) {
+    if (zoom <= 4) return 220;
+    if (zoom <= 5) return 170;
+    if (zoom <= 6) return 130;
+    if (zoom <= 7) return 95;
+    if (zoom <= 8) return 70;
+    return 0;
+  }
+
+  function analyzeHifldFeature(feature) {
+    const coordinates = feature?.geometry?.coordinates || [];
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let minLon = Infinity;
+    let maxLon = -Infinity;
+    let totalLength = 0;
+    let previous = null;
+
+    coordinates.forEach((coordinate) => {
+      const [lon, lat] = coordinate;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      minLat = Math.min(minLat, lat);
+      maxLat = Math.max(maxLat, lat);
+      minLon = Math.min(minLon, lon);
+      maxLon = Math.max(maxLon, lon);
+
+      if (previous) {
+        const dx = lon - previous[0];
+        const dy = lat - previous[1];
+        totalLength += Math.sqrt(dx * dx + dy * dy);
+      }
+
+      previous = [lon, lat];
+    });
+
+    if (!Number.isFinite(minLat) || !Number.isFinite(minLon)) {
+      return null;
+    }
+
+    return {
+      feature,
+      bounds: L.latLngBounds([minLat, minLon], [maxLat, maxLon]),
+      center: [(minLat + maxLat) / 2, (minLon + maxLon) / 2],
+      lengthScore: totalLength,
+      voltage: Number(feature?.properties?.VOLTAGE) || 0,
+      bucket: getHifldVoltageBucket(feature)
+    };
+  }
+
+  function bindHifldFeatureInteractions(feature, layer) {
+    const props = feature.properties || {};
+    const voltage = Number(props.VOLTAGE);
+    const voltageLabel = Number.isFinite(voltage) && voltage > 0
+      ? `${formatNumber(voltage, 0)} kV`
+      : escapeHtml(props.VOLT_CLASS || 'Voltage unavailable');
+    const ownerLabel = escapeHtml(props.OWNER || 'Owner unavailable');
+    const statusLabel = escapeHtml(props.STATUS || 'Status unavailable');
+    const typeLabel = escapeHtml(props.TYPE || 'Transmission');
+    const idLabel = escapeHtml(props.ID || 'Unknown');
+
+    layer.bindTooltip(
+      `<strong>HIFLD Line ${idLabel}</strong><br>${voltageLabel} · ${typeLabel}<br>${ownerLabel}<br>${statusLabel}`,
+      { sticky: true, opacity: 0.95 }
+    );
+
+    layer.on({
+      mouseover(event) {
+        event.target.setStyle({ weight: event.target.options.weight + 1.4, opacity: Math.min(1, event.target.options.opacity + 0.25) });
+      },
+      mouseout(event) {
+        event.target.setStyle(getHifldTransmissionStyle(feature));
+      }
+    });
+  }
+
+  function getVisibleHifldFeatures() {
+    const paddedBounds = map.getBounds().pad(0.25);
+    const zoom = map.getZoom();
+    const minVoltage = hifldMinVoltageForZoom(zoom);
+    const cellSize = hifldClusterCellSize(zoom);
+
+    const visible = hifldTransmissionFeatures.filter((entry) => (
+      entry.bounds.intersects(paddedBounds)
+      && entry.voltage >= minVoltage
+    ));
+
+    if (cellSize <= 0) {
+      return visible.map((entry) => entry.feature);
+    }
+
+    const grouped = new Map();
+
+    visible.forEach((entry) => {
+      const point = map.project(entry.center, zoom);
+      const key = [
+        entry.bucket,
+        Math.floor(point.x / cellSize),
+        Math.floor(point.y / cellSize)
+      ].join(':');
+
+      const existing = grouped.get(key);
+      if (!existing || entry.voltage > existing.voltage || (entry.voltage === existing.voltage && entry.lengthScore > existing.lengthScore)) {
+        grouped.set(key, entry);
+      }
+    });
+
+    return Array.from(grouped.values()).map((entry) => entry.feature);
+  }
+
+  function renderHifldTransmission() {
+    layerHifldTransmission.clearLayers();
+    if (!map.hasLayer(layerTransmission) || !hifldTransmissionLoaded) return;
+
+    const visibleFeatures = getVisibleHifldFeatures();
+    if (!visibleFeatures.length) return;
+
+    L.geoJSON(visibleFeatures, {
+      style: getHifldTransmissionStyle,
+      onEachFeature: bindHifldFeatureInteractions
+    }).addTo(layerHifldTransmission);
+  }
+
+  async function fetchHifldChunkFeatures(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Unable to load ${url}: ${response.status}`);
+    }
+
+    let text = '';
+
+    if (typeof DecompressionStream === 'function') {
+      const decompressed = response.body.pipeThrough(new DecompressionStream('gzip'));
+      text = await new Response(decompressed).text();
+    } else {
+      const buffer = await response.arrayBuffer();
+      text = new TextDecoder().decode(buffer);
+    }
+
+    return text
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
+  }
+
+  async function loadHifldTransmission() {
+    if (hifldTransmissionLoaded) return;
+    if (hifldTransmissionLoadPromise) return hifldTransmissionLoadPromise;
+
+    hifldTransmissionLoadPromise = (async () => {
+      for (const chunkUrl of HIFLD_TRANSMISSION_CHUNKS) {
+        const features = await fetchHifldChunkFeatures(chunkUrl);
+        hifldTransmissionFeatures.push(
+          ...features
+            .map((feature) => analyzeHifldFeature(feature))
+            .filter(Boolean)
+        );
+        continue;
+        L.geoJSON(features, {
+          style: getHifldTransmissionStyle,
+          onEachFeature(feature, layer) {
+            const props = feature.properties || {};
+            const voltage = Number(props.VOLTAGE);
+            const voltageLabel = Number.isFinite(voltage) && voltage > 0
+              ? `${formatNumber(voltage, 0)} kV`
+              : escapeHtml(props.VOLT_CLASS || 'Voltage unavailable');
+            const ownerLabel = escapeHtml(props.OWNER || 'Owner unavailable');
+            const statusLabel = escapeHtml(props.STATUS || 'Status unavailable');
+            const typeLabel = escapeHtml(props.TYPE || 'Transmission');
+            const idLabel = escapeHtml(props.ID || 'Unknown');
+
+            layer.bindTooltip(
+              `<strong>HIFLD Line ${idLabel}</strong><br>${voltageLabel} · ${typeLabel}<br>${ownerLabel}<br>${statusLabel}`,
+              { sticky: true, opacity: 0.95 }
+            );
+
+            layer.on({
+              mouseover(event) {
+                event.target.setStyle({ weight: event.target.options.weight + 1.4, opacity: Math.min(1, event.target.options.opacity + 0.25) });
+              },
+              mouseout(event) {
+                event.target.setStyle(getHifldTransmissionStyle(feature));
+              }
+            });
+          }
+        }).addTo(layerHifldTransmission);
+      }
+
+      hifldTransmissionLoaded = true;
+      renderHifldTransmission();
+      hifldTransmissionLoadPromise = null;
+    })().catch((error) => {
+      hifldTransmissionLoadPromise = null;
+      throw error;
+    });
+
+    return hifldTransmissionLoadPromise;
+  }
+
   function plantToGeneratorMarker(plant) {
     const fuelStyle = getGeneratorFuelStyle(plant.dominantTech);
     const nameplateMw = Number(plant.nmw) || 0;
-    const capacityRadius = 3.8 + Math.sqrt(Math.max(nameplateMw, 1)) / 10.5;
-    const baseRadius = Math.max(fuelStyle.radius + 1.6, Math.min(15.5, capacityRadius));
+    const capacityRadius = 5.2 + Math.sqrt(Math.max(nameplateMw, 1)) / 7.2;
+    const baseRadius = Math.max(fuelStyle.radius + 2.8, Math.min(21, capacityRadius));
     const zoomBoost = generatorZoomRadiusBoost(map.getZoom()) * 1.15;
-    const radius = Math.min(24, baseRadius + zoomBoost);
+    const radius = Math.min(30, baseRadius + zoomBoost);
 
     const marker = L.circleMarker([plant.lat, plant.lon], {
       radius,
@@ -887,6 +1200,357 @@
     renderGenerators();
   }
 
+  async function loadCountyCentroids() {
+    if (countyCentroidsByFips) return countyCentroidsByFips;
+    if (countyCentroidsLoadPromise) return countyCentroidsLoadPromise;
+
+    countyCentroidsLoadPromise = (async () => {
+      const response = await fetch(US_COUNTIES_ATLAS_URL);
+      if (!response.ok) {
+        throw new Error(`Unable to load county atlas: ${response.status}`);
+      }
+
+      const topology = await response.json();
+      const geojson = topojson.feature(topology, topology.objects.counties);
+      const centroidMap = new Map();
+
+      geojson.features.forEach((feature) => {
+        const fips = String(feature.id).padStart(5, '0');
+        const bounds = L.geoJSON(feature).getBounds();
+        if (!bounds.isValid()) return;
+        centroidMap.set(fips, bounds.getCenter());
+      });
+
+      countyCentroidsByFips = centroidMap;
+      countyCentroidsLoadPromise = null;
+      return centroidMap;
+    })().catch((error) => {
+      countyCentroidsLoadPromise = null;
+      throw error;
+    });
+
+    return countyCentroidsLoadPromise;
+  }
+
+  function buildPlannedProjectRows(projects) {
+    return projects
+      .slice(0, 80)
+      .map(([queueId, projectName, technology, mwTotal, status, iaStatus, utility, developer, proposedYear]) => `
+        <tr>
+          <td>${escapeHtml(projectName || 'Unnamed project')}</td>
+          <td>${escapeHtml(canonicalizeGeneratorTechnologyLabel(technology || 'Other'))}</td>
+          <td>${formatNumber(mwTotal, 1)}</td>
+          <td>${escapeHtml(status || 'N/A')}</td>
+          <td>${escapeHtml(iaStatus || 'N/A')}</td>
+          <td>${escapeHtml(proposedYear || 'N/A')}</td>
+        </tr>
+      `)
+      .join('');
+  }
+
+  function buildPlannedGeneratorPopup(record) {
+    const location = [record.county, record.st].filter(Boolean).join(', ');
+    const technologyBreakdown = buildTechnologyBreakdown(record.tech);
+    const projectRows = buildPlannedProjectRows(record.items || []);
+    const sourceName = plannedGeneratorDataset.source?.name || 'Interconnection queue data';
+    const sourceRelease = plannedGeneratorDataset.source?.release || '';
+    const extraCount = Math.max(0, (record.items || []).length - 80);
+
+    return `
+      <div class="popup-header">${escapeHtml(location || 'Planned generators')}</div>
+      <div class="popup-sub">${formatNumber(record.projects)} queued projects · ${formatNumber(record.mw, 1)} MW proposed</div>
+      <table class="popup-table">
+        <tbody>
+          <tr><td>Region</td><td>${escapeHtml(record.region || 'N/A')}</td></tr>
+          <tr><td>County FIPS</td><td>${escapeHtml(record.fips || 'N/A')}</td></tr>
+          <tr><td>Dominant Tech</td><td>${escapeHtml(record.dominantTech || 'Other')}</td></tr>
+        </tbody>
+      </table>
+      <div class="popup-section-label">Technology Mix</div>
+      <div class="popup-tech-list">${technologyBreakdown}</div>
+      <div class="popup-section-label">Queued Projects</div>
+      <div class="popup-scroll">
+        <table class="popup-table popup-generator-table">
+          <thead>
+            <tr style="color:#6e7681;font-size:10px">
+              <td>Project</td><td>Technology</td><td>MW</td><td>Status</td><td>IA Status</td><td>Online Year</td>
+            </tr>
+          </thead>
+          <tbody>${projectRows}</tbody>
+        </table>
+      </div>
+      ${extraCount ? `<div class="popup-source">${formatNumber(extraCount)} additional queued projects omitted from this table for readability.</div>` : ''}
+      <div class="popup-source">Source: ${escapeHtml(sourceName)} ${escapeHtml(sourceRelease)} · county-level placement is approximate because queue records do not include project lat/lon</div>`;
+  }
+
+  function countyToPlannedGeneratorMarker(record, center) {
+    const fuelStyle = getGeneratorFuelStyle(record.dominantTech);
+    const baseRadius = 5.4 + Math.sqrt(Math.max(Number(record.mw) || 1, 1)) / 17;
+    const zoomBoost = generatorZoomRadiusBoost(map.getZoom()) * 0.55;
+    const radius = Math.min(24, Math.max(fuelStyle.radius + 2.2, baseRadius + zoomBoost));
+
+    const marker = L.circleMarker([center.lat, center.lng], {
+      radius,
+      fillColor: fuelStyle.color,
+      color: '#f0f6fc',
+      weight: 0.7,
+      opacity: 0.92,
+      fillOpacity: 0.42,
+      dashArray: '3 2'
+    });
+
+    marker.bindTooltip(
+      `<strong>${escapeHtml(record.county)}, ${escapeHtml(record.st)}</strong><br>${escapeHtml(record.dominantTech)} · ${formatNumber(record.mw, 1)} MW planned · ${formatNumber(record.projects)} projects`,
+      { sticky: true, opacity: 0.95 }
+    );
+    marker.bindPopup(buildPlannedGeneratorPopup(record), { maxWidth: 460 });
+
+    return marker;
+  }
+
+  function buildPlannedClusterTooltip(cluster) {
+    return `<strong>${escapeHtml(cluster.tech)}</strong><br>${formatNumber(cluster.count)} counties · ${formatNumber(cluster.projects)} projects · ${formatNumber(cluster.mw, 1)} MW planned`;
+  }
+
+  function plannedClusterToMarker(cluster) {
+    const fuelStyle = getGeneratorFuelStyle(cluster.tech);
+    const diameter = Math.max(28, Math.min(54, 24 + Math.sqrt(cluster.count) * 4.1));
+    const icon = L.divIcon({
+      html: `<div class="generator-cluster" style="--cluster-color:${fuelStyle.color};width:${diameter}px;height:${diameter}px">
+        <span class="generator-cluster-count">${cluster.count}</span>
+      </div>`,
+      iconSize: [diameter, diameter],
+      iconAnchor: [diameter / 2, diameter / 2],
+      className: ''
+    });
+
+    const marker = L.marker(cluster.center, { icon, zIndexOffset: 320 });
+    marker.bindTooltip(buildPlannedClusterTooltip(cluster), { sticky: true, opacity: 0.95 });
+    marker.on('click', () => {
+      map.fitBounds(cluster.bounds.pad(0.25), { maxZoom: GENERATOR_CLUSTER_MAX_ZOOM + 1 });
+    });
+
+    return marker;
+  }
+
+  function clusterVisiblePlannedGenerators(visibleCounties, zoom) {
+    const cellSize = generatorClusterCellSize(zoom);
+    if (cellSize <= 0) {
+      return { counties: visibleCounties, clusters: [] };
+    }
+
+    const groups = new Map();
+
+    visibleCounties.forEach((record) => {
+      const point = map.project([record.center.lat, record.center.lng], zoom);
+      const key = [
+        record.dominantFuel,
+        Math.floor(point.x / cellSize),
+        Math.floor(point.y / cellSize)
+      ].join(':');
+
+      if (!groups.has(key)) {
+        groups.set(key, {
+          tech: record.dominantTech,
+          dominantFuel: record.dominantFuel,
+          counties: [],
+          projects: 0,
+          mw: 0,
+          bounds: L.latLngBounds([[record.center.lat, record.center.lng], [record.center.lat, record.center.lng]])
+        });
+      }
+
+      const group = groups.get(key);
+      group.counties.push(record);
+      group.projects += Number(record.projects) || 0;
+      group.mw += Number(record.mw) || 0;
+      group.bounds.extend([record.center.lat, record.center.lng]);
+    });
+
+    const counties = [];
+    const clusters = [];
+
+    groups.forEach((group) => {
+      if (group.counties.length === 1) {
+        counties.push(group.counties[0]);
+        return;
+      }
+
+      clusters.push({
+        tech: group.tech,
+        dominantFuel: group.dominantFuel,
+        count: group.counties.length,
+        projects: group.projects,
+        mw: group.mw,
+        bounds: group.bounds,
+        center: group.bounds.getCenter()
+      });
+    });
+
+    return { counties, clusters };
+  }
+
+  async function renderPlannedGenerators() {
+    layerPlannedGenerators.clearLayers();
+    if (!map.hasLayer(layerPlannedGenerators)) return;
+
+    const countyCentroids = await loadCountyCentroids();
+    const paddedBounds = map.getBounds().pad(0.2);
+    const visibleCounties = plannedGeneratorCounties
+      .map((record) => {
+        const center = countyCentroids.get(String(record.fips).padStart(5, '0'));
+        return center ? { ...record, center } : null;
+      })
+      .filter((record) => record && paddedBounds.contains(record.center));
+    const { counties, clusters } = clusterVisiblePlannedGenerators(visibleCounties, map.getZoom());
+
+    counties.forEach((record) => {
+      countyToPlannedGeneratorMarker(record, record.center).addTo(layerPlannedGenerators);
+    });
+
+    clusters.forEach((cluster) => {
+      plannedClusterToMarker(cluster).addTo(layerPlannedGenerators);
+    });
+  }
+
+  function getLegendBodyHtml() {
+    const sections = [];
+
+    if (map.hasLayer(layerRegions)) {
+      const isoRows = Object.entries(ISO_REGIONS)
+        .filter(([key]) => key !== 'OTHER')
+        .map(([, region]) => `
+          <div class="legend-row">
+            <span class="legend-swatch" style="background:${region.color}"></span>
+            <span>${escapeHtml(region.name)}</span>
+          </div>
+        `)
+        .join('');
+
+      sections.push(`
+        <h4>ISO / RTO</h4>
+        ${isoRows}
+      `);
+    }
+
+    if (map.hasLayer(layerTransmission)) {
+      const transmissionRows = [
+        { label: 'HVDC', style: DC_STYLE },
+        { label: '765+ kV', style: TRANSMISSION_STYLES[765] },
+        { label: '500-734 kV', style: TRANSMISSION_STYLES[500] },
+        { label: '300-499 kV', style: TRANSMISSION_STYLES[345] }
+      ]
+        .map(({ label, style }) => {
+          const dash = style.dashArray ? `stroke-dasharray="${style.dashArray}"` : '';
+          return `<div class="legend-row">
+            <svg width="28" height="10" viewBox="0 0 28 10" xmlns="http://www.w3.org/2000/svg">
+              <line x1="0" y1="5" x2="28" y2="5"
+                stroke="${style.color}" stroke-width="${style.weight}" ${dash} opacity="${style.opacity}"/>
+            </svg>
+            <span>${label}</span>
+          </div>`;
+        })
+        .join('');
+
+      sections.push(`
+        <h4>Transmission</h4>
+        ${transmissionRows}
+        <div class="legend-row">
+          <svg width="28" height="10" viewBox="0 0 28 10" xmlns="http://www.w3.org/2000/svg">
+            <line x1="0" y1="5" x2="28" y2="5"
+              stroke="#8ecae6" stroke-width="1.1" opacity="0.3"/>
+          </svg>
+          <span>&lt;300 kV</span>
+        </div>
+      `);
+    }
+
+    const assetRows = [];
+
+    if (map.hasLayer(layerGeneration)) {
+      assetRows.push(`
+        <div class="legend-row">
+          <svg width="28" height="14" viewBox="0 0 28 14" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="14" cy="7" r="5" fill="rgba(13,17,23,0.75)" stroke="#555" stroke-width="1.2"/>
+            <circle cx="14" cy="7" r="2.6" fill="rgba(13,17,23,0.92)"/>
+          </svg>
+          <span>Generation Mix Pies</span>
+        </div>
+      `);
+    }
+
+    if (map.hasLayer(layerGenerators)) {
+      assetRows.push(`
+        <div class="legend-row">
+          <svg width="28" height="14" viewBox="0 0 28 14" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="14" cy="7" r="4.2" fill="#f4a261" fill-opacity="0.62" stroke="#0d1117" stroke-width="0.7"/>
+          </svg>
+          <span>Generator Plants</span>
+        </div>
+      `);
+    }
+
+    if (map.hasLayer(layerPlannedGenerators)) {
+      assetRows.push(`
+        <div class="legend-row">
+          <svg width="28" height="14" viewBox="0 0 28 14" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="14" cy="7" r="4.2" fill="#ffd60a" fill-opacity="0.42" stroke="#f0f6fc" stroke-width="0.7" stroke-dasharray="3 2"/>
+          </svg>
+          <span>Planned Generators</span>
+        </div>
+      `);
+    }
+
+    if (assetRows.length) {
+      sections.push(`
+        <h4>Generation Assets</h4>
+        ${assetRows.join('')}
+      `);
+    }
+
+    const generatorSource = generatorDataset.source
+      ? `Plants: ${escapeHtml(generatorDataset.source.name)} ${escapeHtml(generatorDataset.source.release)}`
+      : 'Plants: EIA Form 860 final 2024 data';
+
+    const notes = [];
+    if (map.hasLayer(layerGenerators)) {
+      notes.push(generatorSource);
+    }
+    if (map.hasLayer(layerGeneration)) {
+      notes.push('Generation mix: previous full day from EIA Grid Monitor');
+    }
+    if (map.hasLayer(layerTransmission)) {
+      notes.push('HIFLD transmission is zoom-filtered and grouped for performance');
+    }
+    if (map.hasLayer(layerPlannedGenerators)) {
+      notes.push('Planned generators are county-based and spatially approximate');
+    }
+    if (map.hasLayer(layerRegions)) {
+      notes.push('Region mapping to this map\'s ISO/RTO layer is approximate');
+    }
+
+    if (!sections.length) {
+      sections.push('<div style="font-size:11px;color:#8b949e">Turn on a layer to see its legend.</div>');
+    }
+
+    if (notes.length) {
+      sections.push(`
+        <div style="margin-top:10px;font-size:9px;color:#484f58">
+          ${notes.join('<br>')}
+        </div>
+      `);
+    }
+
+    return sections.join('');
+  }
+
+  function updateLegend() {
+    if (!legendControlRef) return;
+    const body = legendControlRef.querySelector('.legend-body');
+    if (!body) return;
+    body.innerHTML = getLegendBodyHtml();
+  }
+
   function buildLegend() {
     const LegendControl = L.Control.extend({
       options: { position: 'bottomright' },
@@ -895,52 +1559,12 @@
         L.DomEvent.disableScrollPropagation(div);
         L.DomEvent.disableClickPropagation(div);
 
-        const txRows = [
-          { label: '765 kV AC', style: TRANSMISSION_STYLES[765] },
-          { label: '500 kV AC', style: TRANSMISSION_STYLES[500] },
-          { label: '345 kV AC', style: TRANSMISSION_STYLES[345] },
-          { label: 'HVDC', style: DC_STYLE }
-        ]
-          .map(({ label, style }) => {
-            const dash = style.dashArray ? `stroke-dasharray="${style.dashArray}"` : '';
-            return `<div class="legend-row">
-              <svg width="28" height="10" viewBox="0 0 28 10" xmlns="http://www.w3.org/2000/svg">
-                <line x1="0" y1="5" x2="28" y2="5"
-                  stroke="${style.color}" stroke-width="${style.weight}" ${dash} opacity="${style.opacity}"/>
-              </svg>
-              <span>${label}</span>
-            </div>`;
-          })
-          .join('');
-
-        const isoRows = Object.entries(ISO_REGIONS)
-          .filter(([key]) => key !== 'OTHER')
-          .map(([, region]) => `
-            <div class="legend-row">
-              <span class="legend-swatch" style="background:${region.color}"></span>
-              <span>${escapeHtml(region.name)}</span>
-            </div>
-          `)
-          .join('');
-
-        const generatorSource = generatorDataset.source
-          ? `Plants: ${escapeHtml(generatorDataset.source.name)} ${escapeHtml(generatorDataset.source.release)}`
-          : 'Plants: EIA Form 860 final 2024 data';
-
         div.innerHTML = `
           <div class="legend-header">
             <h4 class="legend-title">Map Legend</h4>
             <button type="button" class="legend-toggle" data-legend-action="toggle">${isCompactViewport() ? 'Show' : 'Hide'}</button>
           </div>
-          <div class="legend-body">
-            <h4>ISO / RTO</h4>
-            ${isoRows}
-            <h4>Transmission</h4>
-            ${txRows}
-            <div style="margin-top:10px;font-size:9px;color:#484f58">
-              ${escapeHtml(generatorSource)}<br>Generation mix: previous full day from EIA Grid Monitor<br>Region mapping to this map's ISO/RTO layer is approximate
-            </div>
-          </div>`;
+          <div class="legend-body">${getLegendBodyHtml()}</div>`;
 
         if (isCompactViewport()) {
           div.classList.add('is-collapsed');
@@ -957,7 +1581,10 @@
       }
     });
 
-    new LegendControl().addTo(map);
+    const legend = new LegendControl();
+    legend.addTo(map);
+    legendControlRef = legend.getContainer();
+    updateLegend();
   }
 
   function buildGeneratorFilterControl() {
@@ -1062,16 +1689,17 @@
 
   function buildLayerControl() {
     const overlays = {
-      'ISO/RTO Regions': layerRegions,
-      'Transmission Lines': layerTransmission,
-      [`<span data-layer-label="generation">${escapeHtml(getGenerationLayerLabelText())}</span>`]: layerGeneration,
-      'Generator Plants (EIA 2024)': layerGenerators
+      [buildLayerControlLabel(LAYER_CONTROL_IDS.regions, 'ISO/RTO Regions')]: layerRegions,
+      [buildLayerControlLabel(LAYER_CONTROL_IDS.transmission, 'Transmission Lines')]: layerTransmission,
+      [buildLayerControlLabel(LAYER_CONTROL_IDS.generation, getGenerationLayerLabelText())]: layerGeneration,
+      [buildLayerControlLabel(LAYER_CONTROL_IDS.generators, 'Generator Plants')]: layerGenerators,
+      [buildLayerControlLabel(LAYER_CONTROL_IDS.plannedGenerators, 'Planned Generators')]: layerPlannedGenerators
     };
 
     const layerControl = L.control.layers(null, overlays, { position: 'bottomleft', collapsed: isCompactViewport() });
     layerControl.addTo(map);
     layerControlRef = layerControl.getContainer();
-    updateGenerationLayerLabel();
+    updateLayerControlTitles();
   }
 
   function startGenerationMixRefreshLoop() {
@@ -1086,6 +1714,9 @@
   async function init() {
     await loadRegions();
     loadTransmission();
+    loadHifldTransmission().catch((error) => {
+      console.error('Failed to load HIFLD transmission layer:', error);
+    });
     loadGenerators();
     buildLegend();
     buildLayerControl();
@@ -1094,9 +1725,38 @@
     startGenerationMixRefreshLoop();
 
     map.on('zoomend moveend overlayadd overlayremove', (event) => {
+      if (event.type === 'overlayadd' || event.type === 'overlayremove') {
+        updateLegend();
+      }
+
       if (event.type === 'overlayremove' && event.layer === layerGenerators) {
         layerGenerators.clearLayers();
         return;
+      }
+
+      if (event.type === 'overlayremove' && event.layer === layerPlannedGenerators) {
+        layerPlannedGenerators.clearLayers();
+        return;
+      }
+
+      if (event.type === 'overlayadd' && event.layer === layerTransmission) {
+        loadHifldTransmission().catch((error) => {
+          console.error('Failed to load HIFLD transmission layer:', error);
+        });
+      }
+
+      if ((event.type === 'zoomend' || event.type === 'moveend') && map.hasLayer(layerTransmission) && hifldTransmissionLoaded) {
+        renderHifldTransmission();
+      }
+
+      if ((event.type === 'zoomend' || event.type === 'moveend') && map.hasLayer(layerGeneration) && generationDataState === 'ready') {
+        renderGenerationMixLayer();
+      }
+
+      if ((event.type === 'zoomend' || event.type === 'moveend') && map.hasLayer(layerPlannedGenerators)) {
+        renderPlannedGenerators().catch((error) => {
+          console.error('Failed to render planned generators:', error);
+        });
       }
 
       if (event.type === 'overlayadd' && event.layer === layerGeneration) {
@@ -1105,6 +1765,12 @@
         } else {
           refreshDailyGenerationMix();
         }
+      }
+
+      if (event.type === 'overlayadd' && event.layer === layerPlannedGenerators) {
+        renderPlannedGenerators().catch((error) => {
+          console.error('Failed to render planned generators:', error);
+        });
       }
 
       if (event.type === 'overlayremove' && event.layer === layerGeneration) {

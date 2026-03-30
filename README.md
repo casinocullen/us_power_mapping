@@ -10,6 +10,7 @@ Interactive Leaflet.js map of the US electric power system.
 - **Transmission Lines** - about 50 major 345 kV, 500 kV, 765 kV AC and HVDC corridors
 - **Daily Generation Mix** - SVG pie-chart markers showing the latest previous full day of regional fuel mix from EIA Grid Monitor
 - **US Generator Plants** - static EIA 2024 plant layer with operable generator profiles, fuel mix, and capacity details
+- **Planned Generators** - county-level view of active and suspended interconnection-queue projects aggregated from national queue data
 - Toggle any layer on and off with the built-in layer control
 - Click any state, pie chart, or generator marker for detailed stats
 
@@ -20,11 +21,13 @@ Interactive Leaflet.js map of the US electric power system.
 | State boundaries | US Atlas TopoJSON (Census TIGER) |
 | Generation mix | EIA Grid Monitor / EIA-930 daily fuel mix API |
 | Generator plants | EIA Form 860 detailed data, final 2024 release |
+| Planned generators | Berkeley Lab Queued Up 2025 Edition, compiled from official ISO/RTO and utility interconnection queues |
 | Transmission routes | FERC/NERC public maps (simplified) |
 | ISO/RTO boundaries | NERC/individual ISO maps (assigned by dominant state) |
 
 > Transmission line routes and ISO/RTO state assignments are approximate.
 > Generator plant data is generated from the local EIA 2024 asset in `js/generator_data_2024.js`.
+> Planned generator data is generated from Berkeley Lab's nationwide interconnection queue workbook into `js/planned_generator_queue_2024.js`.
 > Generation mix updates automatically as EIA publishes each new previous-day daily mix.
 > Boundaries do not reflect exact FERC-certified service territory lines.
 
