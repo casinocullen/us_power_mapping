@@ -12,6 +12,9 @@ body {
 
 :root {
   --left-panel-width: 280px;
+  --panel-edge-gap: 16px;
+  --header-stack-gap: 12px;
+  --header-height: 78px;
 }
 
 #map {
@@ -62,18 +65,21 @@ body {
    ============================================================ */
 #info-panel {
   position: fixed;
-  top: auto;
-  bottom: 56px;
-  left: auto;
-  right: 16px;
+  top: calc(var(--panel-edge-gap) + var(--header-height) + var(--header-stack-gap));
+  left: var(--panel-edge-gap);
+  bottom: auto;
+  right: auto;
   z-index: 1000;
   background: rgba(13, 17, 23, 0.92);
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 12px;
   padding: 14px 18px;
+  width: var(--left-panel-width);
   min-width: 220px;
   max-width: 300px;
+  max-height: calc(100vh - (var(--panel-edge-gap) * 2) - var(--header-height) - var(--header-stack-gap));
+  overflow: auto;
   transition: opacity 0.2s;
 }
 
@@ -709,6 +715,10 @@ body {
    Responsive: collapse legend on mobile
    ============================================================ */
 @media (max-width: 600px) {
+  :root {
+    --panel-edge-gap: 12px;
+    --header-height: 86px;
+  }
   #header {
     top: 12px;
     left: 12px;
@@ -729,13 +739,15 @@ body {
     line-height: 1.35;
   }
   #info-panel {
-    top: auto;
-    bottom: 56px;
-    left: auto;
-    right: 12px;
+    top: calc(var(--panel-edge-gap) + var(--header-height) + var(--header-stack-gap));
+    left: var(--panel-edge-gap);
+    bottom: auto;
+    right: auto;
+    width: min(var(--left-panel-width), calc(100vw - 24px));
     max-width: calc(100vw - 32px);
     min-width: 0;
     padding: 12px 14px;
+    max-height: calc(100vh - (var(--panel-edge-gap) * 2) - var(--header-height) - var(--header-stack-gap));
   }
   .leaflet-control-zoom {
     margin-top: 12px !important;
