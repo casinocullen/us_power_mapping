@@ -74,11 +74,11 @@
   function normalizeGeneratorTechnology(technology) {
     const label = canonicalizeGeneratorTechnologyLabel(technology).toLowerCase();
 
+    if (label.includes('hydroelectric pumped')) return 'Pumped Storage';
     if (label.includes('solar')) return 'Solar';
     if (label.includes('wind')) return 'Wind';
     if (label.includes('battery') || label.includes('storage')) return 'Battery';
     if (label.includes('nuclear')) return 'Nuclear';
-    if (label.includes('hydroelectric pumped')) return 'Pumped Storage';
     if (label.includes('hydro')) return 'Hydroelectric';
     if (label.includes('geothermal')) return 'Geothermal';
     if (label.includes('biomass') || label.includes('wood') || label.includes('landfill') || label.includes('waste')) return 'Biomass';
@@ -253,6 +253,10 @@
     const min = Math.max(0, Math.min(Number(minMw) || 0, generatorMaxNameplateMw));
     const max = Math.max(min, Math.min(Number(maxMw) || generatorMaxNameplateMw, generatorMaxNameplateMw));
     return { minMw: min, maxMw: max };
+  }
+
+  function isCompactViewport() {
+    return window.matchMedia('(max-width: 760px)').matches;
   }
 
   function getGeneratorFuelStyle(technology) {
@@ -924,13 +928,31 @@
           : 'Plants: EIA Form 860 final 2024 data';
 
         div.innerHTML = `
-          <h4>ISO / RTO</h4>
-          ${isoRows}
-          <h4>Transmission</h4>
-          ${txRows}
-          <div style="margin-top:10px;font-size:9px;color:#484f58">
-            ${escapeHtml(generatorSource)}<br>Generation mix: previous full day from EIA Grid Monitor<br>Region mapping to this map's ISO/RTO layer is approximate
+          <div class="legend-header">
+            <h4 class="legend-title">Map Legend</h4>
+            <button type="button" class="legend-toggle" data-legend-action="toggle">${isCompactViewport() ? 'Show' : 'Hide'}</button>
+          </div>
+          <div class="legend-body">
+            <h4>ISO / RTO</h4>
+            ${isoRows}
+            <h4>Transmission</h4>
+            ${txRows}
+            <div style="margin-top:10px;font-size:9px;color:#484f58">
+              ${escapeHtml(generatorSource)}<br>Generation mix: previous full day from EIA Grid Monitor<br>Region mapping to this map's ISO/RTO layer is approximate
+            </div>
           </div>`;
+
+        if (isCompactViewport()) {
+          div.classList.add('is-collapsed');
+        }
+
+        div.addEventListener('click', (event) => {
+          const action = event.target?.dataset?.legendAction;
+          if (action !== 'toggle') return;
+          event.preventDefault();
+          div.classList.toggle('is-collapsed');
+          event.target.textContent = div.classList.contains('is-collapsed') ? 'Show' : 'Hide';
+        });
         return div;
       }
     });
@@ -991,6 +1013,12 @@
         generatorFilterControlRef = div;
         syncGeneratorFilterControl();
 
+        if (isCompactViewport()) {
+          div.classList.add('is-collapsed');
+          const toggleButton = div.querySelector('[data-filter-action="toggle"]');
+          if (toggleButton) toggleButton.textContent = 'Show';
+        }
+
         div.addEventListener('change', (event) => {
           const target = event.target;
           if (!(target instanceof HTMLInputElement)) return;
@@ -1040,7 +1068,7 @@
       'Generator Plants (EIA 2024)': layerGenerators
     };
 
-    const layerControl = L.control.layers(null, overlays, { position: 'bottomleft', collapsed: false });
+    const layerControl = L.control.layers(null, overlays, { position: 'bottomleft', collapsed: isCompactViewport() });
     layerControl.addTo(map);
     layerControlRef = layerControl.getContainer();
     updateGenerationLayerLabel();
