@@ -43,7 +43,7 @@ def cell_value(cell: ET.Element, shared_strings: list[str]) -> str:
     value_node = cell.find(f"{NS}v")
 
     if value_node is None:
-      return ""
+        return ""
 
     raw = value_node.text or ""
     if cell_type == "s":
@@ -97,57 +97,80 @@ def clean_text(value: str) -> str:
     return " ".join((value or "").strip().split())
 
 
+def as_month_text(value: str) -> str:
+    month = as_int(value)
+    if month is None or month < 1 or month > 12:
+        return ""
+    return str(month)
+
+
+def infer_release_label(xlsx_path: Path) -> str:
+    match = re.search(r"([a-z]+)_generator(\d{4})", xlsx_path.stem, re.IGNORECASE)
+    if not match:
+        return xlsx_path.stem
+    return f"{match.group(1).capitalize()} {match.group(2)}"
+
+
 def main():
-    if len(sys.argv) != 4:
-        raise SystemExit("Usage: build_generator_data.py <plant_xlsx> <generator_xlsx> <output_json>")
+    if len(sys.argv) < 3:
+        raise SystemExit(
+            "Usage: build_generator_data.py <eia860m_xlsx> <output_json> [release_label] [release_date] [source_url]"
+        )
 
-    plant_path = Path(sys.argv[1])
-    generator_path = Path(sys.argv[2])
-    output_path = Path(sys.argv[3])
+    workbook_path = Path(sys.argv[1])
+    output_path = Path(sys.argv[2])
+    release_label = sys.argv[3] if len(sys.argv) >= 4 else infer_release_label(workbook_path)
+    release_date = sys.argv[4] if len(sys.argv) >= 5 else ""
+    source_url = sys.argv[5] if len(sys.argv) >= 6 else "https://www.eia.gov/electricity/data/eia860m/"
 
+    header_row = None
     plants = {}
-    for index, row in enumerate(iter_sheet_rows(plant_path, "Plant")):
-        if index < 2:
-            continue
-
-        plant_code = as_int(row.get("C", ""))
-        lat = as_float(row.get("J", ""))
-        lon = as_float(row.get("K", ""))
-        if plant_code is None or lat is None or lon is None:
-            continue
-
-        plants[plant_code] = {
-            "pc": plant_code,
-            "pn": clean_text(row.get("D", "")),
-            "u": clean_text(row.get("B", "")),
-            "city": clean_text(row.get("F", "")),
-            "st": clean_text(row.get("G", "")),
-            "co": clean_text(row.get("I", "")),
-            "lat": round(lat, 6),
-            "lon": round(lon, 6),
-        }
-
     by_plant = {}
     tech_counts = defaultdict(int)
 
-    for index, row in enumerate(iter_sheet_rows(generator_path, "Operable")):
-        if index < 2:
+    for index, row in enumerate(iter_sheet_rows(workbook_path, "Operating")):
+        if index == 2:
+            header_row = {column: clean_text(value) for column, value in row.items()}
             continue
 
-        plant_code = as_int(row.get("C", ""))
-        if plant_code is None or plant_code not in plants:
+        if index < 3 or not header_row:
             continue
 
-        status = clean_text(row.get("X", ""))
-        if status not in {"OP", "OS", "SB"}:
+        values = {header_row.get(column, column): clean_text(value) for column, value in row.items()}
+        plant_code = as_int(values.get("Plant ID", ""))
+        lat = as_float(values.get("Latitude", ""))
+        lon = as_float(values.get("Longitude", ""))
+        if plant_code is None or lat is None or lon is None:
             continue
 
-        technology = clean_text(row.get("H", "")) or "Other"
-        prime_mover = clean_text(row.get("I", ""))
-        generator_id = clean_text(row.get("G", ""))
-        nameplate = as_float(row.get("P", ""))
-        summer = as_float(row.get("R", ""))
-        winter = as_float(row.get("S", ""))
+        status = clean_text(values.get("Status", ""))
+        if not status:
+            continue
+
+        plants.setdefault(
+            plant_code,
+            {
+                "pc": plant_code,
+                "pn": clean_text(values.get("Plant Name", "")),
+                "u": clean_text(values.get("Entity Name", "")),
+                "city": "",
+                "st": clean_text(values.get("Plant State", "")),
+                "co": clean_text(values.get("County", "")),
+                "ba": clean_text(values.get("Balancing Authority Code", "")),
+                "sector": clean_text(values.get("Sector", "")),
+                "lat": round(lat, 6),
+                "lon": round(lon, 6),
+            },
+        )
+
+        technology = clean_text(values.get("Technology", "")) or "Other"
+        prime_mover = clean_text(values.get("Prime Mover Code", ""))
+        generator_id = clean_text(values.get("Generator ID", ""))
+        nameplate = as_float(values.get("Nameplate Capacity (MW)", ""))
+        summer = as_float(values.get("Net Summer Capacity (MW)", ""))
+        winter = as_float(values.get("Net Winter Capacity (MW)", ""))
+        operating_month = as_month_text(values.get("Operating Month", ""))
+        operating_year = clean_text(values.get("Operating Year", ""))
 
         plant_entry = by_plant.setdefault(
             plant_code,
@@ -180,10 +203,12 @@ def main():
             round(nameplate, 3) if nameplate is not None else None,
             round(summer, 3) if summer is not None else None,
             round(winter, 3) if winter is not None else None,
+            operating_month,
+            operating_year,
         ])
 
     records = []
-    for plant_code, plant in by_plant.items():
+    for plant in by_plant.values():
         records.append({
             "pc": plant["pc"],
             "pn": plant["pn"],
@@ -191,6 +216,8 @@ def main():
             "city": plant["city"],
             "st": plant["st"],
             "co": plant["co"],
+            "ba": plant["ba"],
+            "sector": plant["sector"],
             "lat": plant["lat"],
             "lon": plant["lon"],
             "gc": plant["gc"],
@@ -204,9 +231,11 @@ def main():
     records.sort(key=lambda item: (-item["smw"], item["pn"], item["pc"]))
     payload = {
         "source": {
-            "name": "EIA Form 860 detailed data",
-            "release": "Final 2024 data",
-            "release_date": "2025-09-09",
+            "name": "EIA 860M Preliminary Monthly Electric Generator Inventory",
+            "release": release_label,
+            "release_date": release_date,
+            "source_url": source_url,
+            "notes": "Built from the Operating tab of the monthly EIA-860M workbook.",
         },
         "plants": records,
         "technology_counts": dict(sorted(tech_counts.items(), key=lambda item: (-item[1], item[0]))),
@@ -214,10 +243,7 @@ def main():
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, separators=(",", ":"))
-    if output_path.suffix.lower() == ".js":
-        output_path.write_text(f"window.GENERATOR_PLANT_DATA={serialized};\n", encoding="utf-8")
-    else:
-        output_path.write_text(serialized, encoding="utf-8")
+    output_path.write_text(serialized, encoding="utf-8")
 
     print(f"Wrote {len(records)} plants to {output_path}")
 

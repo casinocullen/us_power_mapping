@@ -1,0 +1,38 @@
+name: Update EIA 860M Data
+
+on:
+  schedule:
+    - cron: '0 14 24-28 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-eia860m:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Refresh EIA 860M assets
+        run: python scripts/update_eia860m.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --short)" ]; then
+            echo "No EIA 860M changes to commit."
+            exit 0
+          fi
+          git add data/eia860m data/generator_data_860m.json data/planned_generator_data_860m.json
+          git commit -m "Update EIA 860M data"
+          git push

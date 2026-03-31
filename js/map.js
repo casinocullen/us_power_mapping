@@ -1,17 +1,20 @@
 /* ============================================================
    map.js - US Power System Map
    Depends on: Leaflet, TopoJSON client, data.js globals,
-   generator_data_2024.js globals, planned_generator_queue_2024.js globals
+   lazy-loaded 860M generator JSON assets
    ============================================================ */
 
 (function () {
   'use strict';
 
   const US_ATLAS_URL = 'https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json';
-  const US_COUNTIES_ATLAS_URL = 'https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json';
   const EIA_930_BASE_URL = 'https://www.eia.gov/electricity/930-api';
+  const GENERATOR_DATA_URL = 'data/generator_data_860m.json';
+  const PLANNED_GENERATOR_DATA_URL = 'data/planned_generator_data_860m.json';
   const GENERATOR_CLUSTER_MAX_ZOOM = 7;
   const DAILY_MIX_REFRESH_MS = 60 * 60 * 1000;
+  const DATASET_CACHE_VERSION = document.querySelector('meta[name="publish_date"]')?.content || '2026-03-30';
+  const DATASET_CACHE_NAME = `us-power-map-datasets-${DATASET_CACHE_VERSION}`;
 
   const TRANSMISSION_STYLES = {
     765: { color: '#ff006e', weight: 3.5, opacity: 0.95 },
@@ -58,8 +61,8 @@
     other: 'Other'
   };
 
-  const generatorDataset = window.GENERATOR_PLANT_DATA || { source: null, plants: [] };
-  const plannedGeneratorDataset = window.PLANNED_GENERATOR_QUEUE_DATA || { source: null, counties: [] };
+  let generatorDataset = { source: null, plants: [] };
+  let plannedGeneratorDataset = { source: null, plants: [] };
   const STATE_ABBR_TO_FIPS = {
     AL: 1, AK: 2, AZ: 4, AR: 5, CA: 6, CO: 8, CT: 9, DE: 10, DC: 11, FL: 12, GA: 13,
     HI: 15, ID: 16, IL: 17, IN: 18, IA: 19, KS: 20, KY: 21, LA: 22, ME: 23, MD: 24,
@@ -150,16 +153,31 @@
     return FIPS_TO_ISO[fips] || 'OTHER';
   }
 
-  function mapQueuedRegionToIso(region) {
-    const label = String(region || '').trim();
-    if (!label) return 'OTHER';
-    if (ISO_REGIONS[label]) return label;
-    if (label === 'Southeast') return 'SERC';
-    if (label === 'West') return 'WECC';
-    return 'OTHER';
+  const generatorTypeOptions = Object.keys(GENERATOR_FUEL_STYLES);
+  const generatorMaxNameplateMw = 7000;
+  let generatorPlants = [];
+  let plannedGeneratorPlants = [];
+  let generatorDatasetPromise = null;
+  let plannedGeneratorDatasetPromise = null;
+  let visibleGeneratorPlantsCache = [];
+  let visiblePlannedGeneratorPlantsCache = [];
+  let visibleGeneratorPlantsCacheKey = '';
+  let visiblePlannedGeneratorPlantsCacheKey = '';
+
+  function normalizeGeneratorPlants(plants) {
+    return (plants || []).map((plant) => {
+      const dominantTech = canonicalizeGeneratorTechnologyLabel(Object.keys(plant.tech || {})[0] || 'Other');
+      return {
+        ...plant,
+        dominantTech,
+        dominantFuel: normalizeGeneratorTechnology(dominantTech),
+        isoRegion: mapStateAbbrToIso(plant.st)
+      };
+    });
   }
 
-  const generatorPlants = (generatorDataset.plants || []).map((plant) => {
+  function normalizePlannedGeneratorPlants(plants) {
+    return (plants || []).map((plant) => {
     const dominantTech = canonicalizeGeneratorTechnologyLabel(Object.keys(plant.tech || {})[0] || 'Other');
     return {
       ...plant,
@@ -167,18 +185,8 @@
       dominantFuel: normalizeGeneratorTechnology(dominantTech),
       isoRegion: mapStateAbbrToIso(plant.st)
     };
-  });
-  const generatorTypeOptions = Object.keys(GENERATOR_FUEL_STYLES);
-  const generatorMaxNameplateMw = 7000;
-  const plannedGeneratorCounties = (plannedGeneratorDataset.counties || []).map((county) => {
-    const dominantTech = canonicalizeGeneratorTechnologyLabel(Object.keys(county.tech || {})[0] || 'Other');
-    return {
-      ...county,
-      dominantTech,
-      dominantFuel: normalizeGeneratorTechnology(dominantTech),
-      isoRegion: mapQueuedRegionToIso(county.region)
-    };
-  });
+    });
+  }
 
   const map = L.map('map', {
     center: [39.5, -97.5],
@@ -222,8 +230,6 @@
   let hifldTransmissionFeatures = [];
   let transmissionFeatureEntries = [];
   let regionFeatureEntries = [];
-  let countyCentroidsByFips = null;
-  let countyCentroidsLoadPromise = null;
   let legendControlRef = null;
   let layerControlRef = null;
   let generatorFilterControlRef = null;
@@ -316,13 +322,13 @@
     if (id === LAYER_CONTROL_IDS.generators) {
       return generatorDataset.source
         ? `Source: ${generatorDataset.source.name} ${generatorDataset.source.release}.`
-        : 'Source: EIA Form 860 detailed data, final 2024 release.';
+        : 'Source: EIA 860M Preliminary Monthly Electric Generator Inventory.';
     }
 
     if (id === LAYER_CONTROL_IDS.plannedGenerators) {
       return plannedGeneratorDataset.source
         ? `Source: ${plannedGeneratorDataset.source.name} ${plannedGeneratorDataset.source.release}. ${plannedGeneratorDataset.source.notes || ''}`.trim()
-        : 'Source: interconnection queue data compiled from official ISO/RTO and utility queue sources.';
+        : 'Source: EIA 860M Preliminary Monthly Electric Generator Inventory, Planned tab.';
     }
 
     if (id === LAYER_CONTROL_IDS.generation) {
@@ -388,20 +394,14 @@
       }
     }
 
-    renderGenerators();
-
-    if (map.hasLayer(layerPlannedGenerators)) {
-      renderPlannedGenerators().catch((error) => {
-        console.error('Failed to render planned generators:', error);
-      });
-    }
+    refreshGeneratorLayers();
   }
 
   function getLayerControlText(id) {
     if (id === LAYER_CONTROL_IDS.regions) return 'ISO/RTO Regions';
     if (id === LAYER_CONTROL_IDS.transmission) return 'Transmission Lines';
     if (id === LAYER_CONTROL_IDS.generation) return getGenerationLayerLabelText();
-    if (id === LAYER_CONTROL_IDS.generators) return 'Generator Plants';
+    if (id === LAYER_CONTROL_IDS.generators) return 'Existing Generators';
     if (id === LAYER_CONTROL_IDS.plannedGenerators) return 'Planned Generators';
     return '';
   }
@@ -471,7 +471,7 @@
 
   function buildGeneratorRows(generators) {
     return generators
-      .map(([generatorId, technology, primeMover, status, nameplateMw, summerMw]) => `
+      .map(([generatorId, technology, primeMover, status, nameplateMw, summerMw, winterMw, operatingMonth, operatingYear]) => `
         <tr>
           <td>${escapeHtml(generatorId || 'N/A')}</td>
           <td>${escapeHtml(canonicalizeGeneratorTechnologyLabel(technology || 'Other'))}</td>
@@ -479,6 +479,7 @@
           <td>${escapeHtml(status || 'N/A')}</td>
           <td>${formatNumber(nameplateMw, 1)}</td>
           <td>${formatNumber(summerMw, 1)}</td>
+          <td>${escapeHtml([operatingMonth, operatingYear].filter(Boolean).join('/') || 'N/A')}</td>
         </tr>
       `)
       .join('');
@@ -544,13 +545,13 @@
         <table class="popup-table popup-generator-table">
           <thead>
             <tr style="color:#6e7681;font-size:10px">
-              <td>Unit</td><td>Technology</td><td>Prime Mover</td><td>Status</td><td>Nameplate MW</td><td>Summer MW</td>
+              <td>Unit</td><td>Technology</td><td>Prime Mover</td><td>Status</td><td>Nameplate MW</td><td>Summer MW</td><td>Online</td>
             </tr>
           </thead>
           <tbody>${generatorRows}</tbody>
         </table>
       </div>
-      <div class="popup-source">Source: EIA Form 860 final 2024 data, released September 9, 2025</div>`;
+      <div class="popup-source">Source: ${escapeHtml(generatorDataset.source?.name || 'EIA 860M Preliminary Monthly Electric Generator Inventory')} ${escapeHtml(generatorDataset.source?.release || '')}</div>`;
   }
 
   function buildClusterTooltip(cluster) {
@@ -700,6 +701,93 @@
       throw new Error(`Request failed: ${response.status}`);
     }
     return response.json();
+  }
+
+  async function readCachedJson(url) {
+    if (!('caches' in window)) return null;
+
+    try {
+      const cache = await window.caches.open(DATASET_CACHE_NAME);
+      const cachedResponse = await cache.match(url);
+      if (!cachedResponse) return null;
+      return cachedResponse.json();
+    } catch (error) {
+      console.warn(`Failed to read cached dataset for ${url}:`, error);
+      return null;
+    }
+  }
+
+  async function writeCachedJson(url, response) {
+    if (!('caches' in window)) return;
+
+    try {
+      const cache = await window.caches.open(DATASET_CACHE_NAME);
+      await cache.put(url, response.clone());
+    } catch (error) {
+      console.warn(`Failed to cache dataset for ${url}:`, error);
+    }
+  }
+
+  async function cleanupOldDatasetCaches() {
+    if (!('caches' in window)) return;
+
+    try {
+      const cacheNames = await window.caches.keys();
+      await Promise.all(cacheNames
+        .filter((name) => name.startsWith('us-power-map-datasets-') && name !== DATASET_CACHE_NAME)
+        .map((name) => window.caches.delete(name)));
+    } catch (error) {
+      console.warn('Failed to clean up older dataset caches:', error);
+    }
+  }
+
+  async function fetchCachedDatasetJson(url) {
+    const cachedPayload = await readCachedJson(url);
+    if (cachedPayload) return cachedPayload;
+
+    const response = await fetch(url, { cache: 'force-cache' });
+    if (!response.ok) {
+      throw new Error(`Request failed: ${response.status}`);
+    }
+
+    await writeCachedJson(url, response);
+    return response.json();
+  }
+
+  function ensureGeneratorDatasetLoaded() {
+    if (generatorPlants.length) return Promise.resolve();
+    if (generatorDatasetPromise) return generatorDatasetPromise;
+
+    generatorDatasetPromise = fetchCachedDatasetJson(GENERATOR_DATA_URL)
+      .then((payload) => {
+        generatorDataset = payload || { source: null, plants: [] };
+        generatorPlants = normalizeGeneratorPlants(generatorDataset.plants);
+        updateLayerControlTitles();
+        updateLegend();
+      })
+      .finally(() => {
+        generatorDatasetPromise = null;
+      });
+
+    return generatorDatasetPromise;
+  }
+
+  function ensurePlannedGeneratorDatasetLoaded() {
+    if (plannedGeneratorPlants.length) return Promise.resolve();
+    if (plannedGeneratorDatasetPromise) return plannedGeneratorDatasetPromise;
+
+    plannedGeneratorDatasetPromise = fetchCachedDatasetJson(PLANNED_GENERATOR_DATA_URL)
+      .then((payload) => {
+        plannedGeneratorDataset = payload || { source: null, plants: [] };
+        plannedGeneratorPlants = normalizePlannedGeneratorPlants(plannedGeneratorDataset.plants);
+        updateLayerControlTitles();
+        updateLegend();
+      })
+      .finally(() => {
+        plannedGeneratorDatasetPromise = null;
+      });
+
+    return plannedGeneratorDatasetPromise;
   }
 
   async function fetchLatestDailyMixBounds() {
@@ -1297,7 +1385,7 @@
   }
 
   function plantMatchesGeneratorFilters(plant) {
-    const nameplateMw = Number(plant.nmw) || 0;
+    const nameplateMw = Number(plant.nmw ?? plant.mw) || 0;
     return generatorFilterState.types.has(plant.dominantFuel)
       && nameplateMw >= generatorFilterState.minMw
       && nameplateMw <= generatorFilterState.maxMw;
@@ -1306,6 +1394,54 @@
   function getVisibleGeneratorPlants() {
     const paddedBounds = map.getBounds().pad(0.2);
     return generatorPlants.filter((plant) => (
+      plantMatchesGeneratorFilters(plant)
+      && (!selectedIsoFilter || plant.isoRegion === selectedIsoFilter)
+      && paddedBounds.contains([plant.lat, plant.lon])
+    ));
+  }
+
+  function getGeneratorVisibilityCacheKey() {
+    const bounds = map.getBounds();
+    const types = Array.from(generatorFilterState.types).sort().join(',');
+    return [
+      map.getZoom(),
+      bounds.getSouth().toFixed(3),
+      bounds.getWest().toFixed(3),
+      bounds.getNorth().toFixed(3),
+      bounds.getEast().toFixed(3),
+      selectedIsoFilter || '',
+      generatorFilterState.minMw,
+      generatorFilterState.maxMw,
+      types
+    ].join('|');
+  }
+
+  function setVisibleGeneratorPlantsCache(type, plants, cacheKey) {
+    if (type === 'existing') {
+      visibleGeneratorPlantsCache = plants;
+      visibleGeneratorPlantsCacheKey = cacheKey;
+      return;
+    }
+
+    visiblePlannedGeneratorPlantsCache = plants;
+    visiblePlannedGeneratorPlantsCacheKey = cacheKey;
+  }
+
+  function clearVisibleGeneratorPlantsCache(type) {
+    if (!type || type === 'existing') {
+      visibleGeneratorPlantsCache = [];
+      visibleGeneratorPlantsCacheKey = '';
+    }
+
+    if (!type || type === 'planned') {
+      visiblePlannedGeneratorPlantsCache = [];
+      visiblePlannedGeneratorPlantsCacheKey = '';
+    }
+  }
+
+  function getVisiblePlannedGeneratorPlants() {
+    const paddedBounds = map.getBounds().pad(0.2);
+    return plannedGeneratorPlants.filter((plant) => (
       plantMatchesGeneratorFilters(plant)
       && (!selectedIsoFilter || plant.isoRegion === selectedIsoFilter)
       && paddedBounds.contains([plant.lat, plant.lon])
@@ -1322,19 +1458,53 @@
 
   function updateGeneratorSummaryPanel() {
     if (!generatorSummarySection || !generatorSummaryContent) return;
-    if (!map.hasLayer(layerGenerators)) {
+    const existingLayerOn = map.hasLayer(layerGenerators);
+    const plannedLayerOn = map.hasLayer(layerPlannedGenerators);
+
+    if (!existingLayerOn && !plannedLayerOn) {
       generatorSummarySection.classList.add('hidden');
       return;
     }
 
-    const visiblePlants = getVisibleGeneratorPlants();
-    const totalMw = visiblePlants.reduce((sum, plant) => sum + (Number(plant.nmw) || 0), 0);
-
-    if (!visiblePlants.length) {
+    const waitingOnExisting = existingLayerOn && !generatorPlants.length && generatorDatasetPromise;
+    const waitingOnPlanned = plannedLayerOn && !plannedGeneratorPlants.length && plannedGeneratorDatasetPromise;
+    if (waitingOnExisting || waitingOnPlanned) {
       generatorSummarySection.classList.remove('hidden');
       generatorSummaryContent.innerHTML = `
-        <div class="summary-sub">0 plants in current map view</div>
-        <div style="font-size:11px;color:#8b949e">No generator plants in view for the current map extent and filters.</div>`;
+        <div class="summary-sub">Loading generator data...</div>
+        <div style="font-size:11px;color:#8b949e">Generator layers will render after their datasets finish loading.</div>`;
+      return;
+    }
+
+    const cacheKey = getGeneratorVisibilityCacheKey();
+    const visibleExistingPlants = existingLayerOn
+      ? (visibleGeneratorPlantsCacheKey === cacheKey ? visibleGeneratorPlantsCache : getVisibleGeneratorPlants())
+      : [];
+    const visiblePlannedPlants = plannedLayerOn
+      ? (visiblePlannedGeneratorPlantsCacheKey === cacheKey ? visiblePlannedGeneratorPlantsCache : getVisiblePlannedGeneratorPlants())
+      : [];
+
+    if (existingLayerOn && visibleGeneratorPlantsCacheKey !== cacheKey) {
+      setVisibleGeneratorPlantsCache('existing', visibleExistingPlants, cacheKey);
+    }
+
+    if (plannedLayerOn && visiblePlannedGeneratorPlantsCacheKey !== cacheKey) {
+      setVisibleGeneratorPlantsCache('planned', visiblePlannedPlants, cacheKey);
+    }
+
+    const visiblePlants = [...visibleExistingPlants, ...visiblePlannedPlants];
+    const totalMw = visiblePlants.reduce((sum, plant) => sum + (Number(plant.nmw ?? plant.mw) || 0), 0);
+
+    if (!visiblePlants.length) {
+      const emptyLabel = existingLayerOn && plannedLayerOn
+        ? '0 existing plants and 0 planned plants in current map view'
+        : existingLayerOn
+          ? '0 existing plants in current map view'
+          : '0 planned plants in current map view';
+      generatorSummarySection.classList.remove('hidden');
+      generatorSummaryContent.innerHTML = `
+        <div class="summary-sub">${emptyLabel}</div>
+        <div style="font-size:11px;color:#8b949e">No matching generators are in view for the current map extent and filters.</div>`;
       return;
     }
 
@@ -1344,15 +1514,24 @@
       const label = getGeneratorSummaryLabel(normalized);
       const fuelStyle = getGeneratorFuelStyle(normalized);
       const current = byFuel.get(normalized) || { label, color: fuelStyle.color, mw: 0 };
-      current.mw += Number(plant.nmw) || 0;
+      current.mw += Number(plant.nmw ?? plant.mw) || 0;
       byFuel.set(normalized, current);
     });
+
+    let summaryLine = '';
+    if (existingLayerOn && plannedLayerOn) {
+      summaryLine = `${formatNumber(visibleExistingPlants.length)} of existing plants and ${formatNumber(visiblePlannedPlants.length)} of planned plants in current map view`;
+    } else if (existingLayerOn) {
+      summaryLine = `${formatNumber(visibleExistingPlants.length)} existing plants in current map view`;
+    } else {
+      summaryLine = `${formatNumber(visiblePlannedPlants.length)} planned plants in current map view`;
+    }
 
     const rows = Array.from(byFuel.values())
       .sort((a, b) => b.mw - a.mw)
       .slice(0, 6)
       .map((entry) => {
-        const width = totalMw > 0 ? Math.max(4, (entry.mw / totalMw) * 100) : 0;
+        const width = totalMw > 0 ? Math.max(10, (entry.mw *1.6/ totalMw) * 100) : 0;
         return `<div class="summary-chart-row">
           <span class="summary-chart-label">${escapeHtml(entry.label)}</span>
           <div class="summary-chart-track">
@@ -1365,7 +1544,7 @@
 
     generatorSummarySection.classList.remove('hidden');
     generatorSummaryContent.innerHTML = `
-      <div class="summary-sub">${formatNumber(visiblePlants.length)} plants in current map view</div>
+      <div class="summary-sub">${summaryLine}</div>
       <div class="summary-total">
         <strong>${formatCompactMw(totalMw)}</strong>
         <span>Total</span>
@@ -1412,15 +1591,33 @@
     };
 
     syncGeneratorFilterControl();
-    renderGenerators();
+    refreshGeneratorLayers();
   }
 
   function renderGenerators() {
     layerGenerators.clearLayers();
-    updateGeneratorSummaryPanel();
-    if (!map.hasLayer(layerGenerators)) return;
+    if (!map.hasLayer(layerGenerators)) {
+      clearVisibleGeneratorPlantsCache('existing');
+      return;
+    }
+    if (!generatorPlants.length) {
+      ensureGeneratorDatasetLoaded()
+        .then(() => {
+          if (map.hasLayer(layerGenerators)) {
+            renderGenerators();
+            updateGeneratorSummaryPanel();
+          }
+        })
+        .catch((error) => {
+          console.error('Failed to load existing generator dataset:', error);
+        });
+      updateGeneratorSummaryPanel();
+      return;
+    }
 
+    const cacheKey = getGeneratorVisibilityCacheKey();
     const visiblePlants = getVisibleGeneratorPlants();
+    setVisibleGeneratorPlantsCache('existing', visiblePlants, cacheKey);
     const { plants, clusters } = clusterVisibleGenerators(visiblePlants, map.getZoom());
 
     plants.forEach((plant) => {
@@ -1436,96 +1633,85 @@
     renderGenerators();
   }
 
-  async function loadCountyCentroids() {
-    if (countyCentroidsByFips) return countyCentroidsByFips;
-    if (countyCentroidsLoadPromise) return countyCentroidsLoadPromise;
+  function refreshGeneratorLayers() {
+    renderGenerators();
 
-    countyCentroidsLoadPromise = (async () => {
-      const response = await fetch(US_COUNTIES_ATLAS_URL);
-      if (!response.ok) {
-        throw new Error(`Unable to load county atlas: ${response.status}`);
-      }
+    if (!map.hasLayer(layerPlannedGenerators)) {
+      layerPlannedGenerators.clearLayers();
+      clearVisibleGeneratorPlantsCache('planned');
+      updateGeneratorSummaryPanel();
+      return Promise.resolve();
+    }
 
-      const topology = await response.json();
-      const geojson = topojson.feature(topology, topology.objects.counties);
-      const centroidMap = new Map();
-
-      geojson.features.forEach((feature) => {
-        const fips = String(feature.id).padStart(5, '0');
-        const bounds = L.geoJSON(feature).getBounds();
-        if (!bounds.isValid()) return;
-        centroidMap.set(fips, bounds.getCenter());
+    return renderPlannedGenerators()
+      .catch((error) => {
+        console.error('Failed to render planned generators:', error);
+      })
+      .finally(() => {
+        updateGeneratorSummaryPanel();
       });
-
-      countyCentroidsByFips = centroidMap;
-      countyCentroidsLoadPromise = null;
-      return centroidMap;
-    })().catch((error) => {
-      countyCentroidsLoadPromise = null;
-      throw error;
-    });
-
-    return countyCentroidsLoadPromise;
   }
 
   function buildPlannedProjectRows(projects) {
     return projects
       .slice(0, 80)
-      .map(([queueId, projectName, technology, mwTotal, status, iaStatus, utility, developer, proposedYear]) => `
+      .map(([generatorId, projectName, technology, mwTotal, status, primeMover, summerMw, winterMw, proposedMonth, proposedYear]) => `
         <tr>
-          <td>${escapeHtml(projectName || 'Unnamed project')}</td>
+          <td>${escapeHtml(generatorId || 'Unnamed unit')}</td>
           <td>${escapeHtml(canonicalizeGeneratorTechnologyLabel(technology || 'Other'))}</td>
           <td>${formatNumber(mwTotal, 1)}</td>
           <td>${escapeHtml(status || 'N/A')}</td>
-          <td>${escapeHtml(iaStatus || 'N/A')}</td>
-          <td>${escapeHtml(proposedYear || 'N/A')}</td>
+          <td>${escapeHtml(primeMover || 'N/A')}</td>
+          <td>${escapeHtml([proposedMonth, proposedYear].filter(Boolean).join('/') || 'N/A')}</td>
         </tr>
       `)
       .join('');
   }
 
   function buildPlannedGeneratorPopup(record) {
-    const location = [record.county, record.st].filter(Boolean).join(', ');
+    const location = [record.co, record.st].filter(Boolean).join(', ');
     const technologyBreakdown = buildTechnologyBreakdown(record.tech);
     const projectRows = buildPlannedProjectRows(record.items || []);
-    const sourceName = plannedGeneratorDataset.source?.name || 'Interconnection queue data';
+    const sourceName = plannedGeneratorDataset.source?.name || 'EIA 860M Preliminary Monthly Electric Generator Inventory';
     const sourceRelease = plannedGeneratorDataset.source?.release || '';
     const extraCount = Math.max(0, (record.items || []).length - 80);
 
     return `
-      <div class="popup-header">${escapeHtml(location || 'Planned generators')}</div>
-      <div class="popup-sub">${formatNumber(record.projects)} queued projects · ${formatNumber(record.mw, 1)} MW proposed</div>
+      <div class="popup-header">${escapeHtml(record.pn || 'Planned generators')}</div>
+      <div class="popup-sub">${escapeHtml(location || 'Unknown location')} · ${formatNumber(record.projects)} planned units · ${formatNumber(record.mw, 1)} MW nameplate</div>
       <table class="popup-table">
         <tbody>
-          <tr><td>Region</td><td>${escapeHtml(record.region || 'N/A')}</td></tr>
-          <tr><td>County FIPS</td><td>${escapeHtml(record.fips || 'N/A')}</td></tr>
+          <tr><td>Utility</td><td>${escapeHtml(record.u || 'N/A')}</td></tr>
+          <tr><td>County</td><td>${escapeHtml(record.co || 'N/A')}</td></tr>
+          <tr><td>Plant ID</td><td>${escapeHtml(record.pc || 'N/A')}</td></tr>
+          <tr><td>Summer Capacity</td><td>${formatNumber(record.smw, 1)} MW</td></tr>
           <tr><td>Dominant Tech</td><td>${escapeHtml(record.dominantTech || 'Other')}</td></tr>
         </tbody>
       </table>
       <div class="popup-section-label">Technology Mix</div>
       <div class="popup-tech-list">${technologyBreakdown}</div>
-      <div class="popup-section-label">Queued Projects</div>
+      <div class="popup-section-label">Planned Units</div>
       <div class="popup-scroll">
         <table class="popup-table popup-generator-table">
           <thead>
             <tr style="color:#6e7681;font-size:10px">
-              <td>Project</td><td>Technology</td><td>MW</td><td>Status</td><td>IA Status</td><td>Online Year</td>
+              <td>Unit</td><td>Technology</td><td>MW</td><td>Status</td><td>Prime Mover</td><td>Online</td>
             </tr>
           </thead>
           <tbody>${projectRows}</tbody>
         </table>
       </div>
-      ${extraCount ? `<div class="popup-source">${formatNumber(extraCount)} additional queued projects omitted from this table for readability.</div>` : ''}
-      <div class="popup-source">Source: ${escapeHtml(sourceName)} ${escapeHtml(sourceRelease)} · county-level placement is approximate because queue records do not include project lat/lon</div>`;
+      ${extraCount ? `<div class="popup-source">${formatNumber(extraCount)} additional planned units omitted from this table for readability.</div>` : ''}
+      <div class="popup-source">Source: ${escapeHtml(sourceName)} ${escapeHtml(sourceRelease)}</div>`;
   }
 
-  function countyToPlannedGeneratorMarker(record, center) {
+  function plantToPlannedGeneratorMarker(record) {
     const fuelStyle = getGeneratorFuelStyle(record.dominantTech);
     const baseRadius = 5.4 + Math.sqrt(Math.max(Number(record.mw) || 1, 1)) / 17;
     const zoomBoost = generatorZoomRadiusBoost(map.getZoom()) * 0.55;
     const radius = Math.min(24, Math.max(fuelStyle.radius + 2.2, baseRadius + zoomBoost));
 
-    const marker = L.circleMarker([center.lat, center.lng], {
+    const marker = L.circleMarker([record.lat, record.lon], {
       radius,
       fillColor: fuelStyle.color,
       color: '#f0f6fc',
@@ -1536,7 +1722,7 @@
     });
 
     marker.bindTooltip(
-      `<strong>${escapeHtml(record.county)}, ${escapeHtml(record.st)}</strong><br>${escapeHtml(record.dominantTech)} · ${formatNumber(record.mw, 1)} MW planned · ${formatNumber(record.projects)} projects`,
+      `<strong>${escapeHtml(record.pn || 'Unnamed plant')}</strong><br>${escapeHtml(record.dominantTech)} · ${formatNumber(record.mw, 1)} MW planned · ${formatNumber(record.projects)} units`,
       { sticky: true, opacity: 0.95 }
     );
     marker.bindPopup(buildPlannedGeneratorPopup(record), { maxWidth: 460 });
@@ -1545,14 +1731,14 @@
   }
 
   function buildPlannedClusterTooltip(cluster) {
-    return `<strong>${escapeHtml(cluster.tech)}</strong><br>${formatNumber(cluster.count)} counties · ${formatNumber(cluster.projects)} projects · ${formatNumber(cluster.mw, 1)} MW planned`;
+    return `<strong>${escapeHtml(cluster.tech)}</strong><br>${formatNumber(cluster.count)} plants · ${formatNumber(cluster.projects)} units · ${formatNumber(cluster.mw, 1)} MW planned`;
   }
 
   function plannedClusterToMarker(cluster) {
     const fuelStyle = getGeneratorFuelStyle(cluster.tech);
     const diameter = Math.max(28, Math.min(54, 24 + Math.sqrt(cluster.count) * 4.1));
     const icon = L.divIcon({
-      html: `<div class="generator-cluster" style="--cluster-color:${fuelStyle.color};width:${diameter}px;height:${diameter}px">
+      html: `<div class="generator-cluster generator-cluster-planned" style="--cluster-color:${fuelStyle.color};width:${diameter}px;height:${diameter}px">
         <span class="generator-cluster-count">${cluster.count}</span>
       </div>`,
       iconSize: [diameter, diameter],
@@ -1569,16 +1755,16 @@
     return marker;
   }
 
-  function clusterVisiblePlannedGenerators(visibleCounties, zoom) {
+  function clusterVisiblePlannedGenerators(visiblePlants, zoom) {
     const cellSize = generatorClusterCellSize(zoom);
     if (cellSize <= 0) {
-      return { counties: visibleCounties, clusters: [] };
+      return { plants: visiblePlants, clusters: [] };
     }
 
     const groups = new Map();
 
-    visibleCounties.forEach((record) => {
-      const point = map.project([record.center.lat, record.center.lng], zoom);
+    visiblePlants.forEach((record) => {
+      const point = map.project([record.lat, record.lon], zoom);
       const key = [
         record.dominantFuel,
         Math.floor(point.x / cellSize),
@@ -1589,33 +1775,33 @@
         groups.set(key, {
           tech: record.dominantTech,
           dominantFuel: record.dominantFuel,
-          counties: [],
+          plants: [],
           projects: 0,
           mw: 0,
-          bounds: L.latLngBounds([[record.center.lat, record.center.lng], [record.center.lat, record.center.lng]])
+          bounds: L.latLngBounds([[record.lat, record.lon], [record.lat, record.lon]])
         });
       }
 
       const group = groups.get(key);
-      group.counties.push(record);
+      group.plants.push(record);
       group.projects += Number(record.projects) || 0;
       group.mw += Number(record.mw) || 0;
-      group.bounds.extend([record.center.lat, record.center.lng]);
+      group.bounds.extend([record.lat, record.lon]);
     });
 
-    const counties = [];
+    const plants = [];
     const clusters = [];
 
     groups.forEach((group) => {
-      if (group.counties.length === 1) {
-        counties.push(group.counties[0]);
+      if (group.plants.length === 1) {
+        plants.push(group.plants[0]);
         return;
       }
 
       clusters.push({
         tech: group.tech,
         dominantFuel: group.dominantFuel,
-        count: group.counties.length,
+        count: group.plants.length,
         projects: group.projects,
         mw: group.mw,
         bounds: group.bounds,
@@ -1623,27 +1809,32 @@
       });
     });
 
-    return { counties, clusters };
+    return { plants, clusters };
   }
 
   async function renderPlannedGenerators() {
     layerPlannedGenerators.clearLayers();
-    if (!map.hasLayer(layerPlannedGenerators)) return;
+    if (!map.hasLayer(layerPlannedGenerators)) {
+      clearVisibleGeneratorPlantsCache('planned');
+      return;
+    }
+    if (!plannedGeneratorPlants.length) {
+      try {
+        await ensurePlannedGeneratorDatasetLoaded();
+      } catch (error) {
+        console.error('Failed to load planned generator dataset:', error);
+        return;
+      }
+      if (!map.hasLayer(layerPlannedGenerators)) return;
+    }
 
-    const countyCentroids = await loadCountyCentroids();
-    const paddedBounds = map.getBounds().pad(0.2);
-    const visibleCounties = plannedGeneratorCounties
-      .map((record) => {
-        const center = countyCentroids.get(String(record.fips).padStart(5, '0'));
-        return center ? { ...record, center } : null;
-      })
-      .filter((record) => record
-        && (!selectedIsoFilter || record.isoRegion === selectedIsoFilter)
-        && paddedBounds.contains(record.center));
-    const { counties, clusters } = clusterVisiblePlannedGenerators(visibleCounties, map.getZoom());
+    const cacheKey = getGeneratorVisibilityCacheKey();
+    const visiblePlants = getVisiblePlannedGeneratorPlants();
+    setVisibleGeneratorPlantsCache('planned', visiblePlants, cacheKey);
+    const { plants, clusters } = clusterVisiblePlannedGenerators(visiblePlants, map.getZoom());
 
-    counties.forEach((record) => {
-      countyToPlannedGeneratorMarker(record, record.center).addTo(layerPlannedGenerators);
+    plants.forEach((record) => {
+      plantToPlannedGeneratorMarker(record).addTo(layerPlannedGenerators);
     });
 
     clusters.forEach((cluster) => {
@@ -1665,7 +1856,7 @@
       .join('');
 
     sections.push(`
-      <h4>ISO / RTO</h4>
+      <h4>ISO / RTO SELECTOR</h4>
       <button type="button" class="legend-row legend-filter-row${selectedIsoFilter === null ? ' is-active' : ''}" data-iso-filter="">
         <span class="legend-swatch" style="background:linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04))"></span>
         <span>All Regions</span>
@@ -1720,7 +1911,7 @@
         <svg width="28" height="14" viewBox="0 0 28 14" xmlns="http://www.w3.org/2000/svg">
           <circle cx="14" cy="7" r="4.2" fill="#f4a261" fill-opacity="0.62" stroke="#0d1117" stroke-width="0.7"/>
         </svg>
-        <span>Generator Plants</span>
+        <span>Existing Generators</span>
       </div>
     `);
 
@@ -1737,26 +1928,6 @@
       <h4>Generation Assets</h4>
       ${assetRows.join('')}
     `);
-
-    const generatorSource = generatorDataset.source
-      ? `Plants: ${escapeHtml(generatorDataset.source.name)} ${escapeHtml(generatorDataset.source.release)}`
-      : 'Plants: EIA Form 860 final 2024 data';
-
-    const notes = [
-      generatorSource,
-      'Generation mix: previous full day from EIA Grid Monitor',
-      'HIFLD transmission is zoom-filtered and grouped for performance',
-      'Planned generators are county-based and spatially approximate',
-      'Region mapping to this map\'s ISO/RTO layer is approximate'
-    ];
-
-    if (notes.length) {
-      sections.push(`
-        <div style="margin-top:10px;font-size:9px;color:#484f58">
-          ${notes.join('<br>')}
-        </div>
-      `);
-    }
 
     return sections.join('');
   }
@@ -1803,6 +1974,10 @@
             map.addLayer(layerItem.layer);
           } else {
             map.removeLayer(layerItem.layer);
+          }
+
+          if (toggleId === LAYER_CONTROL_IDS.generators || toggleId === LAYER_CONTROL_IDS.plannedGenerators) {
+            refreshGeneratorLayers();
           }
         });
 
@@ -1928,7 +2103,7 @@
           }
 
           syncGeneratorFilterControl();
-          renderGenerators();
+          refreshGeneratorLayers();
         });
 
         return div;
@@ -1948,6 +2123,7 @@
   }
 
   async function init() {
+    cleanupOldDatasetCaches();
     await loadRegions();
     loadTransmission();
     loadHifldTransmission().catch((error) => {
@@ -1965,18 +2141,12 @@
         updateLegend();
       }
 
-      if ((event.type === 'overlayadd' || event.type === 'overlayremove') && (event.layer === layerGenerators)) {
-        updateGeneratorSummaryPanel();
-      }
-
       if (event.type === 'overlayremove' && event.layer === layerGenerators) {
         layerGenerators.clearLayers();
-        return;
       }
 
       if (event.type === 'overlayremove' && event.layer === layerPlannedGenerators) {
         layerPlannedGenerators.clearLayers();
-        return;
       }
 
       if (event.type === 'overlayadd' && event.layer === layerTransmission) {
@@ -1998,10 +2168,8 @@
         renderGenerationMixLayer();
       }
 
-      if ((event.type === 'zoomend' || event.type === 'moveend') && map.hasLayer(layerPlannedGenerators)) {
-        renderPlannedGenerators().catch((error) => {
-          console.error('Failed to render planned generators:', error);
-        });
+      if ((event.type === 'zoomend' || event.type === 'moveend') && (map.hasLayer(layerGenerators) || map.hasLayer(layerPlannedGenerators))) {
+        refreshGeneratorLayers();
       }
 
       if (event.type === 'overlayadd' && event.layer === layerGeneration) {
@@ -2012,18 +2180,15 @@
         }
       }
 
-      if (event.type === 'overlayadd' && event.layer === layerPlannedGenerators) {
-        renderPlannedGenerators().catch((error) => {
-          console.error('Failed to render planned generators:', error);
-        });
-      }
-
       if (event.type === 'overlayremove' && event.layer === layerGeneration) {
         clearGenerationMarkers();
       }
 
-      if (event.type !== 'overlayadd' || event.layer === layerGenerators) {
-        renderGenerators();
+      if (
+        (event.type === 'overlayadd' || event.type === 'overlayremove')
+        && (event.layer === layerGenerators || event.layer === layerPlannedGenerators)
+      ) {
+        refreshGeneratorLayers();
       }
     });
 

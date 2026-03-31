@@ -141,7 +141,7 @@ body {
 
 .summary-chart-row {
   display: grid;
-  grid-template-columns: 48px 1fr 58px;
+  grid-template-columns: 44px 1fr 54px;
   gap: 6px;
   align-items: center;
 }
@@ -156,7 +156,7 @@ body {
 
 .summary-chart-track {
   position: relative;
-  width: min(100%, 92px);
+  width: min(100%, 128px);
   justify-self: end;
   height: 8px;
   border-radius: 999px;
@@ -308,6 +308,8 @@ body {
   color: #c9d1d9;
   width: 280px;
   max-width: 280px;
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
 }
 
 .legend-header {
@@ -338,6 +340,9 @@ body {
 
 .legend-body {
   margin-top: 10px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .layer-control-body {
@@ -405,6 +410,13 @@ body {
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
+.legend-filter-row[data-iso-filter] {
+  gap: 6px;
+  margin-bottom: 2px;
+  font-size: 10px;
+  padding: 3px 5px;
+}
+
 .legend-filter-row:hover {
   background: rgba(255,255,255,0.05);
   border-color: rgba(255,255,255,0.08);
@@ -422,6 +434,11 @@ body {
   border-radius: 3px;
   flex-shrink: 0;
   border: 1px solid rgba(255,255,255,0.15);
+}
+
+.legend-filter-row[data-iso-filter] .legend-swatch {
+  width: 12px;
+  height: 12px;
 }
 
 .legend-line-sample {
@@ -704,6 +721,10 @@ body {
   box-shadow: 0 8px 20px rgba(0,0,0,0.35);
 }
 
+.generator-cluster-planned {
+  border-style: dashed;
+}
+
 .generator-cluster-count {
   font-size: 11px;
   font-weight: 700;
@@ -763,8 +784,13 @@ body {
   .legend-panel {
     width: min(280px, calc(100vw - 24px));
     max-width: min(280px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
     font-size: 10px;
     padding: 10px 12px;
+  }
+  .legend-body {
+    max-height: calc(100vh - 84px);
+    padding-right: 2px;
   }
   .legend-swatch { width: 12px; height: 12px; }
   .generator-filter-panel {

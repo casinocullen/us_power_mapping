@@ -87,116 +87,151 @@ def as_float(value: str) -> float | None:
         return None
 
 
-def parse_first_fips(value: str) -> str | None:
-    for token in re.split(r"[;,|/ ]+", clean_text(value)):
-        digits = re.sub(r"\D", "", token)
-        if len(digits) == 4:
-            digits = f"0{digits}"
-        if len(digits) == 5:
-            return digits
-    return None
+def as_int(value: str) -> int | None:
+    try:
+        stripped = clean_text(value)
+        if not stripped:
+            return None
+        return int(float(stripped))
+    except Exception:
+        return None
+
+
+def infer_release_label(xlsx_path: Path) -> str:
+    match = re.search(r"([a-z]+)_generator(\d{4})", xlsx_path.stem, re.IGNORECASE)
+    if not match:
+        return xlsx_path.stem
+    return f"{match.group(1).capitalize()} {match.group(2)}"
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: build_planned_generator_data.py <queue_xlsx> <output_json>")
+    if len(sys.argv) < 3:
+        raise SystemExit(
+            "Usage: build_planned_generator_data.py <eia860m_xlsx> <output_json> [release_label] [release_date] [source_url]"
+        )
 
-    queue_path = Path(sys.argv[1])
+    workbook_path = Path(sys.argv[1])
     output_path = Path(sys.argv[2])
+    release_label = sys.argv[3] if len(sys.argv) >= 4 else infer_release_label(workbook_path)
+    release_date = sys.argv[4] if len(sys.argv) >= 5 else ""
+    source_url = sys.argv[5] if len(sys.argv) >= 6 else "https://www.eia.gov/electricity/data/eia860m/"
 
-    rows = iter_sheet_rows(queue_path, "03. Complete Queue Data")
     header_row = None
-    records_by_county = {}
+    records_by_plant = {}
     technology_counts = defaultdict(int)
 
-    for index, row in enumerate(rows):
-        if index == 1:
+    for index, row in enumerate(iter_sheet_rows(workbook_path, "Planned")):
+        if index == 2:
             header_row = {column: clean_text(value) for column, value in row.items()}
             continue
 
-        if index < 2 or not header_row:
+        if index < 3 or not header_row:
             continue
 
         values = {header_row.get(column, column): clean_text(value) for column, value in row.items()}
-        queue_status = values.get("q_status", "").lower()
-        if queue_status not in {"active", "suspended"}:
+        plant_code = as_int(values.get("Plant ID", ""))
+        lat = as_float(values.get("Latitude", ""))
+        lon = as_float(values.get("Longitude", ""))
+        if plant_code is None or lat is None or lon is None:
             continue
 
-        county_fips = parse_first_fips(values.get("fips_codes", ""))
-        if not county_fips:
+        status = clean_text(values.get("Status", ""))
+        if not status:
             continue
 
-        mw_total = sum(as_float(values.get(field, "")) or 0.0 for field in ("mw1", "mw2", "mw3"))
-        technology = clean_text(values.get("type_clean", "")) or clean_text(values.get("project_type", "")) or "Other"
-        project_name = clean_text(values.get("project_name", "")) or clean_text(values.get("poi_name", "")) or values.get("q_id", "Unknown")
-        county_name = clean_text(values.get("county", "")) or "Unknown"
-        state_code = clean_text(values.get("state", "")) or "NA"
+        nameplate = as_float(values.get("Nameplate Capacity (MW)", ""))
+        summer = as_float(values.get("Net Summer Capacity (MW)", ""))
+        winter = as_float(values.get("Net Winter Capacity (MW)", ""))
+        technology = clean_text(values.get("Technology", "")) or "Other"
+        plant_name = clean_text(values.get("Plant Name", "")) or "Unknown plant"
+        generator_id = clean_text(values.get("Generator ID", ""))
+        prime_mover = clean_text(values.get("Prime Mover Code", ""))
+        operation_month = clean_text(values.get("Planned Operation Month", ""))
+        operation_year = clean_text(values.get("Planned Operation Year", ""))
 
-        county_entry = records_by_county.setdefault(
-            county_fips,
+        plant_entry = records_by_plant.setdefault(
+            plant_code,
             {
-                "fips": county_fips,
-                "county": county_name,
-                "st": state_code,
-                "region": clean_text(values.get("region", "")) or "Unknown",
+                "pc": plant_code,
+                "pn": plant_name,
+                "u": clean_text(values.get("Entity Name", "")),
+                "st": clean_text(values.get("Plant State", "")),
+                "co": clean_text(values.get("County", "")),
+                "ba": clean_text(values.get("Balancing Authority Code", "")),
+                "sector": clean_text(values.get("Sector", "")),
+                "lat": round(lat, 6),
+                "lon": round(lon, 6),
                 "projects": 0,
                 "mw": 0.0,
+                "smw": 0.0,
+                "wmw": 0.0,
                 "tech": defaultdict(int),
                 "items": [],
             },
         )
 
-        county_entry["projects"] += 1
-        county_entry["mw"] += mw_total
-        county_entry["tech"][technology] += 1
+        plant_entry["projects"] += 1
+        if nameplate is not None:
+            plant_entry["mw"] += nameplate
+        if summer is not None:
+            plant_entry["smw"] += summer
+        if winter is not None:
+            plant_entry["wmw"] += winter
+
+        plant_entry["tech"][technology] += 1
         technology_counts[technology] += 1
-        county_entry["items"].append([
-            clean_text(values.get("q_id", "")),
-            project_name,
+        plant_entry["items"].append([
+            generator_id,
+            plant_name,
             technology,
-            round(mw_total, 3),
-            queue_status,
-            clean_text(values.get("IA_status_clean", "")) or clean_text(values.get("IA_status_raw", "")),
-            clean_text(values.get("utility", "")),
-            clean_text(values.get("developer", "")),
-            clean_text(values.get("prop_year", "")),
+            round(nameplate, 3) if nameplate is not None else None,
+            status,
+            prime_mover,
+            round(summer, 3) if summer is not None else None,
+            round(winter, 3) if winter is not None else None,
+            operation_month,
+            operation_year,
         ])
 
     records = []
-    for county in records_by_county.values():
-        county["items"].sort(key=lambda item: (-item[3], item[1], item[0]))
+    for plant in records_by_plant.values():
+        plant["items"].sort(key=lambda item: ((item[9] or "9999"), (item[8] or "99"), item[2], item[0]))
         records.append({
-            "fips": county["fips"],
-            "county": county["county"],
-            "st": county["st"],
-            "region": county["region"],
-            "projects": county["projects"],
-            "mw": round(county["mw"], 3),
-            "tech": dict(sorted(county["tech"].items(), key=lambda item: (-item[1], item[0]))),
-            "items": county["items"],
+            "pc": plant["pc"],
+            "pn": plant["pn"],
+            "u": plant["u"],
+            "st": plant["st"],
+            "co": plant["co"],
+            "ba": plant["ba"],
+            "sector": plant["sector"],
+            "lat": plant["lat"],
+            "lon": plant["lon"],
+            "projects": plant["projects"],
+            "mw": round(plant["mw"], 3),
+            "smw": round(plant["smw"], 3),
+            "wmw": round(plant["wmw"], 3),
+            "tech": dict(sorted(plant["tech"].items(), key=lambda item: (-item[1], item[0]))),
+            "items": plant["items"],
         })
 
-    records.sort(key=lambda item: (-item["mw"], -item["projects"], item["st"], item["county"]))
+    records.sort(key=lambda item: (-item["mw"], item["pn"], item["pc"]))
 
     payload = {
         "source": {
-            "name": "Berkeley Lab Queued Up",
-            "release": "2025 Edition (through end of 2024)",
-            "source_url": "https://emp.lbl.gov/queues",
-            "notes": "Compiled from official ISO/RTO and utility interconnection queue data.",
+            "name": "EIA 860M Preliminary Monthly Electric Generator Inventory",
+            "release": release_label,
+            "release_date": release_date,
+            "source_url": source_url,
         },
-        "counties": records,
+        "plants": records,
         "technology_counts": dict(sorted(technology_counts.items(), key=lambda item: (-item[1], item[0]))),
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, separators=(",", ":"))
-    if output_path.suffix.lower() == ".js":
-        output_path.write_text(f"window.PLANNED_GENERATOR_QUEUE_DATA={serialized};\n", encoding="utf-8")
-    else:
-        output_path.write_text(serialized, encoding="utf-8")
+    output_path.write_text(serialized, encoding="utf-8")
 
-    print(f"Wrote {len(records)} county-planned-generator records to {output_path}")
+    print(f"Wrote {len(records)} planned plant records to {output_path}")
 
 
 if __name__ == "__main__":
