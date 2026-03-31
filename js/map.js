@@ -1573,6 +1573,17 @@
       }
     });
 
+    if (map.hasLayer(layerRegions)) {
+      renderRegions();
+    }
+
+    if (map.hasLayer(layerTransmission)) {
+      renderTransmission();
+      if (hifldTransmissionLoaded) {
+        renderHifldTransmission();
+      }
+    }
+
     syncGeneratorFilterControl();
     updateLegend();
     updateLayerControlTitles();
