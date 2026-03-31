@@ -343,7 +343,7 @@
   }
 
   function getGenerationLayerLabelText() {
-    return `Generation Mix - ${generationLegendDate}`;
+    return `Daily Fuel Mix`;
   }
 
   function getLayerSourceNote(id) {
@@ -598,22 +598,22 @@
   }
 
   function generatorClusterCellSize(zoom) {
-    if (zoom <= 3) return 96;
-    if (zoom <= 4) return 82;
-    if (zoom <= 5) return 68;
-    if (zoom <= 6) return 54;
-    if (zoom <= GENERATOR_CLUSTER_MAX_ZOOM) return 40;
+    if (zoom <= 3) return 120;
+    if (zoom <= 4) return 104;
+    if (zoom <= 5) return 88;
+    if (zoom <= 6) return 70;
+    if (zoom <= GENERATOR_CLUSTER_MAX_ZOOM) return 52;
     return 0;
   }
 
   function generatorZoomRadiusBoost(zoom) {
     if (zoom <= 6) return 0;
-    if (zoom === 7) return 0.8;
-    if (zoom === 8) return 1.6;
-    if (zoom === 9) return 2.4;
-    if (zoom === 10) return 3.4;
-    if (zoom === 11) return 4.6;
-    return 5.8;
+    if (zoom === 7) return 0.5;
+    if (zoom === 8) return 1.1;
+    if (zoom === 9) return 1.8;
+    if (zoom === 10) return 2.6;
+    if (zoom === 11) return 3.5;
+    return 4.2;
   }
 
   function buildDailyGenerationPopup(isoKey, genData) {
@@ -1325,18 +1325,18 @@
   function plantToGeneratorMarker(plant) {
     const fuelStyle = getGeneratorFuelStyle(plant.dominantTech);
     const nameplateMw = Number(plant.nmw) || 0;
-    const capacityRadius = 5.2 + Math.sqrt(Math.max(nameplateMw, 1)) / 7.2;
-    const baseRadius = Math.max(fuelStyle.radius + 2.8, Math.min(21, capacityRadius));
-    const zoomBoost = generatorZoomRadiusBoost(map.getZoom()) * 1.15;
-    const radius = Math.min(30, baseRadius + zoomBoost);
+    const capacityRadius = 4.3 + Math.sqrt(Math.max(nameplateMw, 1)) / 8.8;
+    const baseRadius = Math.max(fuelStyle.radius + 1.7, Math.min(16, capacityRadius));
+    const zoomBoost = generatorZoomRadiusBoost(map.getZoom());
+    const radius = Math.min(22, baseRadius + zoomBoost);
 
     const marker = L.circleMarker([plant.lat, plant.lon], {
       radius,
       fillColor: fuelStyle.color,
-      color: '#0d1117',
-      weight: 0.5,
-      opacity: 0.9,
-      fillOpacity: 0.62
+      color: 'rgba(13,17,23,0.7)',
+      weight: 0.35,
+      opacity: 0.8,
+      fillOpacity: 0.48
     });
 
     marker.bindTooltip(
@@ -1350,7 +1350,7 @@
 
   function clusterToMarker(cluster) {
     const fuelStyle = getGeneratorFuelStyle(cluster.tech);
-    const diameter = Math.max(28, Math.min(52, 24 + Math.sqrt(cluster.count) * 3.8));
+    const diameter = Math.max(30, Math.min(56, 26 + Math.sqrt(cluster.count) * 4.2));
     const icon = L.divIcon({
       html: `<div class="generator-cluster" style="--cluster-color:${fuelStyle.color};width:${diameter}px;height:${diameter}px">
         <span class="generator-cluster-count">${cluster.count}</span>
@@ -2075,7 +2075,7 @@
           <circle cx="14" cy="7" r="5" fill="rgba(13,17,23,0.75)" stroke="#555" stroke-width="1.2"/>
           <circle cx="14" cy="7" r="2.6" fill="rgba(13,17,23,0.92)"/>
         </svg>
-        <span>Generation Mix Pies</span>
+        <span>Fuel Mix Pies</span>
       </div>
     `);
 
