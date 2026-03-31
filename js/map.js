@@ -54,8 +54,11 @@
   };
 
   const DAILY_FUEL_LABELS = {
+    battery: 'Battery',
     gas: 'Natural Gas',
     coal: 'Coal',
+    imports: 'Imports',
+    exports: 'Exports',
     nuclear: 'Nuclear',
     wind: 'Wind',
     solar: 'Solar',
@@ -114,7 +117,7 @@
   function mapEiaFuelToMixKey(fuelTypeId) {
     switch (fuelTypeId) {
       case 'BAT':
-        return null;
+        return 'battery';
       case 'NG':
         return 'gas';
       case 'COL':
@@ -432,6 +435,10 @@
       }
     }
 
+    if (map.hasLayer(layerGeneration) && generationDataState === 'ready') {
+      renderGenerationMixLayer();
+    }
+
     refreshGeneratorLayers();
     updateUrlFromState();
   }
@@ -480,8 +487,29 @@
     return { minMw: min, maxMw: max };
   }
 
+  function nudgeGeneratorFilterInput(input, deltaMw) {
+    if (!(input instanceof HTMLInputElement)) return;
+    const currentValue = Number(input.value) || 0;
+    input.value = String(currentValue + deltaMw);
+    applyGeneratorFiltersFromControl();
+  }
+
   function isCompactViewport() {
     return window.matchMedia('(max-width: 760px)').matches;
+  }
+
+  function formatMonthYear(month, year) {
+    const monthNumber = Number(month);
+    const normalizedYear = String(year || '').trim();
+
+    if (!normalizedYear) return 'N/A';
+    if (!Number.isFinite(monthNumber) || monthNumber < 1 || monthNumber > 12) {
+      return normalizedYear;
+    }
+
+    const date = new Date(Date.UTC(2000, monthNumber - 1, 1));
+    const monthLabel = date.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+    return `${monthLabel} ${normalizedYear}`;
   }
 
   function getGeneratorFuelStyle(technology) {
@@ -515,10 +543,8 @@
           <td>${escapeHtml(generatorId || 'N/A')}</td>
           <td>${escapeHtml(canonicalizeGeneratorTechnologyLabel(technology || 'Other'))}</td>
           <td>${escapeHtml(primeMover || 'N/A')}</td>
-          <td>${escapeHtml(status || 'N/A')}</td>
           <td>${formatNumber(nameplateMw, 1)}</td>
-          <td>${formatNumber(summerMw, 1)}</td>
-          <td>${escapeHtml([operatingMonth, operatingYear].filter(Boolean).join('/') || 'N/A')}</td>
+          <td>${escapeHtml(formatMonthYear(operatingMonth, operatingYear))}</td>
         </tr>
       `)
       .join('');
@@ -584,7 +610,7 @@
         <table class="popup-table popup-generator-table">
           <thead>
             <tr style="color:#6e7681;font-size:10px">
-              <td>Unit</td><td>Technology</td><td>Prime Mover</td><td>Status</td><td>Nameplate MW</td><td>Summer MW</td><td>Online</td>
+              <td>Unit</td><td>Technology</td><td>Prime Mover</td><td>MW</td><td>Online</td>
             </tr>
           </thead>
           <tbody>${generatorRows}</tbody>
@@ -616,11 +642,42 @@
     return 4.2;
   }
 
+  function createVisibleMarkerRadiusScale(visiblePlants, valueAccessor, minRadius, maxRadius) {
+    const values = visiblePlants
+      .map((plant) => Math.max(Number(valueAccessor(plant)) || 0, 0))
+      .filter((value) => value > 0)
+      .sort((a, b) => a - b);
+
+    if (!values.length) {
+      return () => minRadius;
+    }
+
+    const minValue = values[0];
+    const maxValue = values[values.length - 1];
+
+    if (minValue === maxValue) {
+      const midpoint = (minRadius + maxRadius) / 2;
+      return () => midpoint;
+    }
+
+    const minLog = Math.log10(minValue + 1);
+    const maxLog = Math.log10(maxValue + 1);
+    const spread = Math.max(maxLog - minLog, 0.0001);
+
+    return (value) => {
+      const safeValue = Math.max(Number(value) || 0, 0);
+      const normalized = (Math.log10(safeValue + 1) - minLog) / spread;
+      const eased = Math.pow(Math.max(0, Math.min(1, normalized)), 0.75);
+      return minRadius + eased * (maxRadius - minRadius);
+    };
+  }
+
   function buildDailyGenerationPopup(isoKey, genData) {
     const region = ISO_REGIONS[isoKey] || { fullName: isoKey };
     const mix = genData.mix;
     const total = Object.values(mix).reduce((sum, value) => sum + value, 0);
-    const avgGw = total / 24 / 1000;
+    const demandMwh = Number(genData.demandMwh) || total;
+    const avgGw = demandMwh / 24 / 1000;
     const pieSvg = buildPieSvg(mix, 110, avgGw.toFixed(1), 'avg GW');
 
     const rows = Object.entries(mix)
@@ -638,7 +695,7 @@
 
     return `
       <div class="popup-header">${region.fullName || isoKey}</div>
-      <div class="popup-sub">${escapeHtml(genData.displayDate)} · ${formatNumber(total, 0)} MWh total · ${avgGw.toFixed(1)} avg GW</div>
+      <div class="popup-sub">${escapeHtml(genData.displayDate)} · ${formatNumber(demandMwh, 0)} MWh demand · ${avgGw.toFixed(1)} avg GW</div>
       <div class="popup-pie-container">
         ${pieSvg}
         <div style="font-size:11px;color:#8b949e;line-height:1.6">
@@ -658,12 +715,13 @@
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <div class="popup-source">Source: EIA Grid Monitor daily fuel mix · battery storage and other negative values are excluded from pie totals · region mapping is approximate to this map’s ISO/RTO layer</div>`;
+      <div class="popup-source">Source: EIA Grid Monitor daily fuel mix, demand, and interchange · pie includes positive generation, battery discharge, and net imports or exports · region mapping is approximate to this map's ISO/RTO layer</div>`;
   }
 
   function createGenerationMarkerIcon(genData) {
     const total = Object.values(genData.mix).reduce((sum, value) => sum + value, 0);
-    const avgGw = total / 24 / 1000;
+    const demandMwh = Number(genData.demandMwh) || total;
+    const avgGw = demandMwh / 24 / 1000;
     const base = 72;
     const zoom = map.getZoom();
     const zoomScale = zoom <= 4
@@ -704,17 +762,25 @@
     const region = ISO_REGIONS[isoKey] || ISO_REGIONS.OTHER;
     const gen = GENERATION_MIX[isoKey];
     const daily = regionGenerationMix[isoKey];
+    const avgDemandGw = gen ? (gen.totalTwh * 1000) / 8760 : null;
 
     let detailRows = '';
     let note = region.description || '';
 
     if (daily) {
-      const total = Object.values(daily.mix).reduce((sum, value) => sum + value, 0);
-      detailRows = `<div class="info-row"><span>Daily Gen</span><span>${formatNumber(total, 0)} MWh</span></div>
+      const dailyMixTotal = Object.values(daily.mix).reduce((sum, value) => sum + value, 0);
+      const dailyDemandMwh = Number(daily.demandMwh) || dailyMixTotal;
+      detailRows = `<div class="info-row"><span>Daily Demand</span><span>${formatNumber(dailyDemandMwh / 1000, 1)} GWh</span></div>
         <div class="info-row"><span>Mix Date</span><span>${daily.shortDate}</span></div>`;
-      note = `Daily fuel mix from EIA Grid Monitor for ${daily.sourceLabel}. Mapping to this map's ISO/RTO regions is approximate.`;
+      if (gen) {
+        detailRows += `
+        <div class="info-row"><span>Avg Demand</span><span>${formatNumber(dailyDemandMwh / 24 / 1000, 1)} GW</span></div>
+        <div class="info-row"><span>Peak Demand</span><span>${formatNumber(gen.peakGw, 1)} GW</span></div>`;
+      }
+      note = `Daily fuel mix, demand, and interchange from EIA Grid Monitor for ${daily.sourceLabel}. Mapping to this map's ISO/RTO regions is approximate.`;
     } else if (gen) {
       detailRows = `<div class="info-row"><span>Annual Gen</span><span>${gen.totalTwh.toFixed(0)} TWh</span></div>
+        <div class="info-row"><span>Avg Demand</span><span>${formatNumber(avgDemandGw, 1)} GW</span></div>
         <div class="info-row"><span>Peak Demand</span><span>${gen.peakGw.toFixed(1)} GW</span></div>`;
     }
 
@@ -844,34 +910,74 @@
     if (!config) return null;
 
     const queryDate = formatEiaQueryDate(dateParts);
-    const totals = { gas: 0, coal: 0, nuclear: 0, wind: 0, solar: 0, hydro: 0, other: 0 };
+    const totals = { gas: 0, battery: 0, coal: 0, imports: 0, exports: 0, nuclear: 0, wind: 0, solar: 0, hydro: 0, other: 0 };
+    let demandMwh = 0;
+    let interchangeMwh = 0;
 
     const responses = await Promise.all(
       config.respondents.map(async (respondentId) => {
-        const params = new URLSearchParams();
-        params.append('type[0]', 'NG');
-        params.append('respondent[0]', respondentId);
-        params.append('start', queryDate);
-        params.append('end', queryDate);
-        params.append('frequency', 'daily');
-        params.append('timezone', config.timeZone);
+        const fuelParams = new URLSearchParams();
+        fuelParams.append('type[0]', 'NG');
+        fuelParams.append('respondent[0]', respondentId);
+        fuelParams.append('start', queryDate);
+        fuelParams.append('end', queryDate);
+        fuelParams.append('frequency', 'daily');
+        fuelParams.append('timezone', config.timeZone);
 
-        const payload = await fetchJson(`${EIA_930_BASE_URL}/region_data_by_fuel_type/series_data?${params.toString()}`);
-        return Array.isArray(payload) ? payload[0]?.data || [] : [];
+        const regionParams = new URLSearchParams();
+        regionParams.append('type[0]', 'D');
+        regionParams.append('type[1]', 'TI');
+        regionParams.append('respondent[0]', respondentId);
+        regionParams.append('start', queryDate);
+        regionParams.append('end', queryDate);
+        regionParams.append('frequency', 'daily');
+        regionParams.append('timezone', config.timeZone);
+
+        const [fuelPayload, regionPayload] = await Promise.all([
+          fetchJson(`${EIA_930_BASE_URL}/region_data_by_fuel_type/series_data?${fuelParams.toString()}`),
+          fetchJson(`${EIA_930_BASE_URL}/region_data/series_data?${regionParams.toString()}`)
+        ]);
+
+        return {
+          fuelRows: Array.isArray(fuelPayload) ? fuelPayload[0]?.data || [] : [],
+          regionRows: Array.isArray(regionPayload) ? regionPayload[0]?.data || [] : []
+        };
       })
     );
 
-    responses.flat().forEach((row) => {
-      const fuelKey = mapEiaFuelToMixKey(row.FUEL_TYPE_ID);
-      const value = Number(row?.VALUES?.DATA?.[0]) || 0;
-      if (!fuelKey) return;
-      if (value <= 0) return;
-      totals[fuelKey] += value;
+    responses.forEach(({ fuelRows, regionRows }) => {
+      fuelRows.forEach((row) => {
+        const fuelKey = mapEiaFuelToMixKey(row.FUEL_TYPE_ID);
+        const value = Number(row?.VALUES?.DATA?.[0]) || 0;
+        if (!fuelKey) return;
+        if (value <= 0) return;
+        totals[fuelKey] += value;
+      });
+
+      regionRows.forEach((row) => {
+        const value = Number(row?.VALUES?.DATA?.[0]) || 0;
+        if (row.TYPE_ID === 'D') {
+          demandMwh += value;
+          return;
+        }
+
+        if (row.TYPE_ID === 'TI') {
+          interchangeMwh += value;
+        }
+      });
     });
+
+    if (interchangeMwh < 0) {
+      totals.imports += Math.abs(interchangeMwh);
+    } else if (interchangeMwh > 0) {
+      totals.exports += interchangeMwh;
+    }
 
     return {
       isoKey,
       mix: totals,
+      demandMwh,
+      interchangeMwh,
       dateKey: queryDate,
       isoDate: `${dateParts.year}-${dateParts.month}-${dateParts.day}`,
       displayDate: formatEiaDisplayDate(dateParts),
@@ -890,6 +996,7 @@
     clearGenerationMarkers();
 
     Object.entries(regionGenerationMix).forEach(([isoKey, genData]) => {
+      if (selectedIsoFilter && isoKey !== selectedIsoFilter) return;
       const regionMeta = GENERATION_MIX[isoKey];
       if (!regionMeta) return;
 
@@ -910,7 +1017,7 @@
     try {
       generationDataState = 'loading';
       generationLegendDate = 'updating latest previous-day EIA data';
-      generationLegendNote = 'Source: EIA Grid Monitor daily fuel mix. Battery storage and any negative values are excluded from pie totals.';
+      generationLegendNote = 'Source: EIA Grid Monitor daily fuel mix, demand, and interchange.';
       updateGenerationLayerLabel();
 
       const bounds = await fetchLatestDailyMixBounds();
@@ -924,7 +1031,7 @@
       if (generationDataDateKey === dateKey) {
         generationDataState = 'ready';
         generationLegendDate = formatEiaDisplayDate(dateParts);
-        generationLegendNote = `Latest previous full day available from EIA Grid Monitor: ${formatEiaDisplayDate(dateParts)}. EIA LAST_UPDATE ${bounds.LAST_UPDATE}. Battery storage and any negative values are excluded from pie totals.`;
+        generationLegendNote = `Latest previous full day available from EIA Grid Monitor: ${formatEiaDisplayDate(dateParts)}. EIA LAST_UPDATE ${bounds.LAST_UPDATE}. Includes daily fuel mix, demand, and interchange.`;
         updateGenerationLayerLabel();
         return;
       }
@@ -943,7 +1050,7 @@
       generationDataDateKey = dateKey;
       generationDataState = 'ready';
       generationLegendDate = formatEiaDisplayDate(dateParts);
-      generationLegendNote = `Latest previous full day available from EIA Grid Monitor: ${formatEiaDisplayDate(dateParts)}. EIA LAST_UPDATE ${bounds.LAST_UPDATE}. Battery storage and any negative values are excluded from pie totals. Region mapping to this map's ISO/RTO layer is approximate.`;
+      generationLegendNote = `Latest previous full day available from EIA Grid Monitor: ${formatEiaDisplayDate(dateParts)}. EIA LAST_UPDATE ${bounds.LAST_UPDATE}. Includes daily fuel mix, demand, and interchange. Region mapping to this map's ISO/RTO layer is approximate.`;
       updateGenerationLayerLabel();
       renderGenerationMixLayer();
     } catch (error) {
@@ -1322,13 +1429,12 @@
     return hifldTransmissionLoadPromise;
   }
 
-  function plantToGeneratorMarker(plant) {
+  function plantToGeneratorMarker(plant, radiusScale) {
     const fuelStyle = getGeneratorFuelStyle(plant.dominantTech);
     const nameplateMw = Number(plant.nmw) || 0;
-    const capacityRadius = 4.3 + Math.sqrt(Math.max(nameplateMw, 1)) / 8.8;
-    const baseRadius = Math.max(fuelStyle.radius + 1.7, Math.min(16, capacityRadius));
+    const baseRadius = Math.max(fuelStyle.radius + 1.3, radiusScale(nameplateMw));
     const zoomBoost = generatorZoomRadiusBoost(map.getZoom());
-    const radius = Math.min(22, baseRadius + zoomBoost);
+    const radius = Math.min(26, baseRadius + zoomBoost);
 
     const marker = L.circleMarker([plant.lat, plant.lon], {
       radius,
@@ -1506,6 +1612,7 @@
 
   function updateUrlFromState() {
     if (isApplyingUrlState) return;
+    updateResetButtonVisibility();
 
     if (hasDefaultViewState()) {
       if (window.location.hash) {
@@ -1541,6 +1648,7 @@
     if (window.location.hash !== nextHash) {
       window.history.replaceState(null, '', nextHash);
     }
+    updateResetButtonVisibility();
   }
 
   function applyUrlState(state) {
@@ -1792,9 +1900,10 @@
     const visiblePlants = getVisibleGeneratorPlants();
     setVisibleGeneratorPlantsCache('existing', visiblePlants, cacheKey);
     const { plants, clusters } = clusterVisibleGenerators(visiblePlants, map.getZoom());
+    const radiusScale = createVisibleMarkerRadiusScale(visiblePlants, (plant) => plant.nmw, 5, 14.5);
 
     plants.forEach((plant) => {
-      plantToGeneratorMarker(plant).addTo(layerGenerators);
+      plantToGeneratorMarker(plant, radiusScale).addTo(layerGenerators);
     });
 
     clusters.forEach((cluster) => {
@@ -1830,12 +1939,12 @@
       .slice(0, 80)
       .map(([generatorId, projectName, technology, mwTotal, status, primeMover, summerMw, winterMw, proposedMonth, proposedYear]) => `
         <tr>
-          <td>${escapeHtml(generatorId || 'Unnamed unit')}</td>
-          <td>${escapeHtml(canonicalizeGeneratorTechnologyLabel(technology || 'Other'))}</td>
-          <td>${formatNumber(mwTotal, 1)}</td>
-          <td>${escapeHtml(status || 'N/A')}</td>
-          <td>${escapeHtml(primeMover || 'N/A')}</td>
-          <td>${escapeHtml([proposedMonth, proposedYear].filter(Boolean).join('/') || 'N/A')}</td>
+          <td class="planned-col-unit">${escapeHtml(generatorId || 'Unnamed unit')}</td>
+          <td class="planned-col-tech">${escapeHtml(canonicalizeGeneratorTechnologyLabel(technology || 'Other'))}</td>
+          <td class="planned-col-mw">${formatNumber(mwTotal, 1)}</td>
+          <td class="planned-col-status">${escapeHtml(status || 'N/A')}</td>
+          <td class="planned-col-prime">${escapeHtml(primeMover || 'N/A')}</td>
+          <td class="planned-col-online">${escapeHtml(formatMonthYear(proposedMonth, proposedYear))}</td>
         </tr>
       `)
       .join('');
@@ -1868,7 +1977,7 @@
         <table class="popup-table popup-generator-table">
           <thead>
             <tr style="color:#6e7681;font-size:10px">
-              <td>Unit</td><td>Technology</td><td>MW</td><td>Status</td><td>Prime Mover</td><td>Online</td>
+              <td class="planned-col-unit">Unit</td><td class="planned-col-tech">Technology</td><td class="planned-col-mw">MW</td><td class="planned-col-status">Status</td><td class="planned-col-prime">Prime Mover</td><td class="planned-col-online">Online</td>
             </tr>
           </thead>
           <tbody>${projectRows}</tbody>
@@ -1878,11 +1987,11 @@
       <div class="popup-source">Source: ${escapeHtml(sourceName)} ${escapeHtml(sourceRelease)}</div>`;
   }
 
-  function plantToPlannedGeneratorMarker(record) {
+  function plantToPlannedGeneratorMarker(record, radiusScale) {
     const fuelStyle = getGeneratorFuelStyle(record.dominantTech);
-    const baseRadius = 5.4 + Math.sqrt(Math.max(Number(record.mw) || 1, 1)) / 17;
+    const baseRadius = Math.max(fuelStyle.radius + 2.2, radiusScale(record.mw));
     const zoomBoost = generatorZoomRadiusBoost(map.getZoom()) * 0.55;
-    const radius = Math.min(24, Math.max(fuelStyle.radius + 2.2, baseRadius + zoomBoost));
+    const radius = Math.min(24, baseRadius + zoomBoost);
 
     const marker = L.circleMarker([record.lat, record.lon], {
       radius,
@@ -2005,9 +2114,10 @@
     const visiblePlants = getVisiblePlannedGeneratorPlants();
     setVisibleGeneratorPlantsCache('planned', visiblePlants, cacheKey);
     const { plants, clusters } = clusterVisiblePlannedGenerators(visiblePlants, map.getZoom());
+    const radiusScale = createVisibleMarkerRadiusScale(visiblePlants, (plant) => plant.mw, 6, 16);
 
     plants.forEach((record) => {
-      plantToPlannedGeneratorMarker(record).addTo(layerPlannedGenerators);
+      plantToPlannedGeneratorMarker(record, radiusScale).addTo(layerPlannedGenerators);
     });
 
     clusters.forEach((cluster) => {
@@ -2112,6 +2222,13 @@
     body.innerHTML = getLegendBodyHtml();
   }
 
+  function updateResetButtonVisibility() {
+    if (!legendControlRef) return;
+    const resetButton = legendControlRef.querySelector('[data-legend-action="reset"]');
+    if (!resetButton) return;
+    resetButton.hidden = hasDefaultViewState();
+  }
+
   function buildLayerLegendControl() {
     const LegendControl = L.Control.extend({
       options: { position: 'topright' },
@@ -2189,6 +2306,7 @@
     layerControlRef = legendControlRef;
     updateLayerControlTitles();
     updateLegend();
+    updateResetButtonVisibility();
   }
 
   function buildGeneratorFilterControl() {
@@ -2234,11 +2352,11 @@
               <div class="generator-filter-range">
                 <label>
                   <span>Min</span>
-                  <input type="number" min="0" max="${generatorMaxNameplateMw}" step="10" value="0" data-filter-bound="min">
+                  <input type="number" min="0" max="${generatorMaxNameplateMw}" step="50" value="0" data-filter-bound="min">
                 </label>
                 <label>
                   <span>Max</span>
-                  <input type="number" min="0" max="${generatorMaxNameplateMw}" step="10" value="${generatorMaxNameplateMw}" data-filter-bound="max">
+                  <input type="number" min="0" max="${generatorMaxNameplateMw}" step="50" value="${generatorMaxNameplateMw}" data-filter-bound="max">
                 </label>
               </div>
             </div>
@@ -2261,6 +2379,16 @@
           if (!(target instanceof HTMLInputElement)) return;
           if (!target.matches('[data-filter-type], [data-filter-bound]')) return;
           applyGeneratorFiltersFromControl();
+        });
+
+        div.addEventListener('keydown', (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLInputElement)) return;
+          if (!target.matches('input[data-filter-bound]')) return;
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+
+          event.preventDefault();
+          nudgeGeneratorFilterInput(target, event.key === 'ArrowUp' ? 50 : -50);
         });
 
         div.addEventListener('click', (event) => {

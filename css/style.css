@@ -709,6 +709,18 @@ body {
   vertical-align: top;
 }
 
+.popup-generator-table .planned-col-mw,
+.popup-generator-table .planned-col-online {
+  white-space: nowrap;
+}
+
+.popup-generator-table .planned-col-status {
+  width: 120px;
+  max-width: 120px;
+  white-space: normal;
+  line-height: 1.25;
+}
+
 /* ============================================================
    Generation marker icon
    ============================================================ */

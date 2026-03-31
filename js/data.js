@@ -116,7 +116,10 @@ window.FIPS_TO_ISO = {
 // ── Fuel type colors ──────────────────────────────────────
 window.FUEL_COLORS = {
   gas:     { color: '#f4a261', label: 'Natural Gas' },
+  battery: { color: '#06d6a0', label: 'Battery' },
   coal:    { color: '#9d8189', label: 'Coal' },
+  imports: { color: '#90e0ef', label: 'Imports' },
+  exports: { color: '#ff8fab', label: 'Exports' },
   nuclear: { color: '#f72585', label: 'Nuclear' },
   wind:    { color: '#4cc9f0', label: 'Wind' },
   solar:   { color: '#ffd60a', label: 'Solar' },
