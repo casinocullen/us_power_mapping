@@ -15,6 +15,8 @@
   const DAILY_MIX_REFRESH_MS = 60 * 60 * 1000;
   const DATASET_CACHE_VERSION = document.querySelector('meta[name="publish_date"]')?.content || '2026-03-30';
   const DATASET_CACHE_NAME = `us-power-map-datasets-${DATASET_CACHE_VERSION}`;
+  const DEFAULT_MAP_CENTER = [39.5, -97.5];
+  const DEFAULT_MAP_ZOOM = 5;
 
   const TRANSMISSION_STYLES = {
     765: { color: '#ff006e', weight: 3.5, opacity: 0.95 },
@@ -155,6 +157,7 @@
 
   const generatorTypeOptions = Object.keys(GENERATOR_FUEL_STYLES);
   const generatorMaxNameplateMw = 7000;
+  const initialUrlState = parseUrlState();
   let generatorPlants = [];
   let plannedGeneratorPlants = [];
   let generatorDatasetPromise = null;
@@ -163,6 +166,33 @@
   let visiblePlannedGeneratorPlantsCache = [];
   let visibleGeneratorPlantsCacheKey = '';
   let visiblePlannedGeneratorPlantsCacheKey = '';
+  let isApplyingUrlState = false;
+
+  function parseUrlState() {
+    const hash = window.location.hash.replace(/^#/, '').trim();
+    const params = new URLSearchParams(hash);
+    const lat = params.has('lat') ? Number(params.get('lat')) : null;
+    const lng = params.has('lng') ? Number(params.get('lng')) : null;
+    const zoom = params.has('z') ? Number(params.get('z')) : null;
+
+    return {
+      lat: Number.isFinite(lat) ? lat : null,
+      lng: Number.isFinite(lng) ? lng : null,
+      zoom: Number.isFinite(zoom) ? zoom : null,
+      layers: new Set((params.get('layers') || '').split(',').filter(Boolean)),
+      hasLayers: params.has('layers'),
+      iso: params.get('iso') || null,
+      minMw: params.has('minMw') ? Number(params.get('minMw')) : null,
+      maxMw: params.has('maxMw') ? Number(params.get('maxMw')) : null,
+      types: new Set((params.get('types') || '').split(',').filter(Boolean)),
+      hasTypes: params.has('types')
+    };
+  }
+
+  function initialLayerEnabled(id, defaultValue) {
+    if (!initialUrlState.hasLayers) return defaultValue;
+    return initialUrlState.layers.has(id);
+  }
 
   function normalizeGeneratorPlants(plants) {
     return (plants || []).map((plant) => {
@@ -189,8 +219,10 @@
   }
 
   const map = L.map('map', {
-    center: [39.5, -97.5],
-    zoom: 5,
+    center: initialUrlState.lat !== null && initialUrlState.lng !== null
+      ? [initialUrlState.lat, initialUrlState.lng]
+      : DEFAULT_MAP_CENTER,
+    zoom: initialUrlState.zoom !== null ? initialUrlState.zoom : DEFAULT_MAP_ZOOM,
     minZoom: 3,
     maxZoom: 12,
     zoomControl: false,
@@ -210,7 +242,7 @@
   const layerTransmission = L.layerGroup().addTo(map);
   const layerHifldTransmission = L.layerGroup().addTo(layerTransmission);
   const layerGeneration = L.layerGroup();
-  const layerGenerators = L.layerGroup().addTo(map);
+  const layerGenerators = L.layerGroup();
   const layerPlannedGenerators = L.layerGroup();
   const HIFLD_TRANSMISSION_CHUNKS = [
     'data/transmission_lines/Transmission_Lines_20250824_021843_chunk0000.geojson.gz',
@@ -233,12 +265,16 @@
   let legendControlRef = null;
   let layerControlRef = null;
   let generatorFilterControlRef = null;
-  let selectedIsoFilter = null;
+  let selectedIsoFilter = initialUrlState.iso || null;
   const regionBoundsByIso = new Map();
   let generatorFilterState = {
-    types: new Set(generatorTypeOptions),
-    minMw: 0,
-    maxMw: generatorMaxNameplateMw
+    types: initialUrlState.hasTypes && initialUrlState.types.size
+      ? new Set(Array.from(initialUrlState.types).filter((type) => generatorTypeOptions.includes(type)))
+      : new Set(generatorTypeOptions),
+    minMw: Number.isFinite(initialUrlState.minMw) ? Math.max(0, initialUrlState.minMw) : 0,
+    maxMw: Number.isFinite(initialUrlState.maxMw)
+      ? Math.min(generatorMaxNameplateMw, Math.max(Number.isFinite(initialUrlState.minMw) ? initialUrlState.minMw : 0, initialUrlState.maxMw))
+      : generatorMaxNameplateMw
   };
   const LAYER_CONTROL_IDS = {
     regions: 'regions',
@@ -385,6 +421,8 @@
     const regionBounds = getSelectedIsoBounds();
     if (regionBounds && regionBounds.isValid()) {
       map.fitBounds(regionBounds.pad(0.1), { maxZoom: 7 });
+    } else if (!selectedIsoFilter) {
+      map.setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
     }
 
     if (map.hasLayer(layerTransmission)) {
@@ -395,6 +433,7 @@
     }
 
     refreshGeneratorLayers();
+    updateUrlFromState();
   }
 
   function getLayerControlText(id) {
@@ -1439,6 +1478,128 @@
     }
   }
 
+  function getActiveLayerIds() {
+    return getLayerControlItems()
+      .filter(({ layer }) => map.hasLayer(layer))
+      .map(({ id }) => id);
+  }
+
+  function hasDefaultViewState() {
+    const center = map.getCenter();
+    const activeLayers = getActiveLayerIds();
+    const defaultLayers = [
+      LAYER_CONTROL_IDS.regions,
+      LAYER_CONTROL_IDS.transmission,
+      LAYER_CONTROL_IDS.generators
+    ];
+
+    return Math.abs(center.lat - DEFAULT_MAP_CENTER[0]) < 0.0001
+      && Math.abs(center.lng - DEFAULT_MAP_CENTER[1]) < 0.0001
+      && map.getZoom() === DEFAULT_MAP_ZOOM
+      && activeLayers.length === defaultLayers.length
+      && defaultLayers.every((id) => activeLayers.includes(id))
+      && !selectedIsoFilter
+      && generatorFilterState.minMw === 0
+      && generatorFilterState.maxMw === generatorMaxNameplateMw
+      && generatorFilterState.types.size === generatorTypeOptions.length;
+  }
+
+  function updateUrlFromState() {
+    if (isApplyingUrlState) return;
+
+    if (hasDefaultViewState()) {
+      if (window.location.hash) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+      return;
+    }
+
+    const center = map.getCenter();
+    const params = new URLSearchParams();
+    params.set('lat', center.lat.toFixed(4));
+    params.set('lng', center.lng.toFixed(4));
+    params.set('z', String(map.getZoom()));
+    params.set('layers', getActiveLayerIds().join(','));
+
+    if (selectedIsoFilter) {
+      params.set('iso', selectedIsoFilter);
+    }
+
+    if (generatorFilterState.minMw > 0) {
+      params.set('minMw', String(generatorFilterState.minMw));
+    }
+
+    if (generatorFilterState.maxMw < generatorMaxNameplateMw) {
+      params.set('maxMw', String(generatorFilterState.maxMw));
+    }
+
+    if (generatorFilterState.types.size !== generatorTypeOptions.length) {
+      params.set('types', Array.from(generatorFilterState.types).sort().join(','));
+    }
+
+    const nextHash = `#${params.toString()}`;
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, '', nextHash);
+    }
+  }
+
+  function applyUrlState(state) {
+    isApplyingUrlState = true;
+
+    selectedIsoFilter = state.iso || null;
+    generatorFilterState = {
+      types: state.hasTypes && state.types.size
+        ? new Set(Array.from(state.types).filter((type) => generatorTypeOptions.includes(type)))
+        : new Set(generatorTypeOptions),
+      minMw: Number.isFinite(state.minMw) ? Math.max(0, state.minMw) : 0,
+      maxMw: Number.isFinite(state.maxMw)
+        ? Math.min(generatorMaxNameplateMw, Math.max(Number.isFinite(state.minMw) ? state.minMw : 0, state.maxMw))
+        : generatorMaxNameplateMw
+    };
+
+    if (Number.isFinite(state.lat) && Number.isFinite(state.lng) && Number.isFinite(state.zoom)) {
+      map.setView([state.lat, state.lng], state.zoom, { animate: false });
+    }
+
+    getLayerControlItems().forEach(({ id, layer }) => {
+      const shouldEnable = state.hasLayers
+        ? state.layers.has(id)
+        : (id === LAYER_CONTROL_IDS.regions || id === LAYER_CONTROL_IDS.transmission || id === LAYER_CONTROL_IDS.generators);
+
+      if (shouldEnable && !map.hasLayer(layer)) {
+        map.addLayer(layer);
+      } else if (!shouldEnable && map.hasLayer(layer)) {
+        map.removeLayer(layer);
+      }
+    });
+
+    syncGeneratorFilterControl();
+    updateLegend();
+    updateLayerControlTitles();
+    refreshGeneratorLayers();
+    isApplyingUrlState = false;
+    updateUrlFromState();
+  }
+
+  function resetMapToDefaultView() {
+    applyUrlState({
+      lat: DEFAULT_MAP_CENTER[0],
+      lng: DEFAULT_MAP_CENTER[1],
+      zoom: DEFAULT_MAP_ZOOM,
+      layers: new Set([
+        LAYER_CONTROL_IDS.regions,
+        LAYER_CONTROL_IDS.transmission,
+        LAYER_CONTROL_IDS.generators
+      ]),
+      hasLayers: true,
+      iso: null,
+      minMw: 0,
+      maxMw: generatorMaxNameplateMw,
+      types: new Set(generatorTypeOptions),
+      hasTypes: false
+    });
+  }
+
   function getVisiblePlannedGeneratorPlants() {
     const paddedBounds = map.getBounds().pad(0.2);
     return plannedGeneratorPlants.filter((plant) => (
@@ -1592,6 +1753,7 @@
 
     syncGeneratorFilterControl();
     refreshGeneratorLayers();
+    updateUrlFromState();
   }
 
   function renderGenerators() {
@@ -1950,7 +2112,10 @@
         div.innerHTML = `
           <div class="legend-header">
             <h4 class="legend-title">Layer Selector</h4>
-            <button type="button" class="legend-toggle" data-legend-action="toggle">${isCompactViewport() ? 'Show' : 'Hide'}</button>
+            <div class="legend-actions">
+              <button type="button" class="legend-toggle" data-legend-action="reset">Reset</button>
+              <button type="button" class="legend-toggle" data-legend-action="toggle">${isCompactViewport() ? 'Show' : 'Hide'}</button>
+            </div>
           </div>
           <div class="legend-body">
             <div class="layer-control-section">
@@ -1979,6 +2144,8 @@
           if (toggleId === LAYER_CONTROL_IDS.generators || toggleId === LAYER_CONTROL_IDS.plannedGenerators) {
             refreshGeneratorLayers();
           }
+
+          updateUrlFromState();
         });
 
         div.addEventListener('click', (event) => {
@@ -1990,6 +2157,12 @@
           }
 
           const action = event.target?.dataset?.legendAction;
+          if (action === 'reset') {
+            event.preventDefault();
+            resetMapToDefaultView();
+            return;
+          }
+
           if (action !== 'toggle') return;
           event.preventDefault();
           div.classList.toggle('is-collapsed');
@@ -2104,6 +2277,7 @@
 
           syncGeneratorFilterControl();
           refreshGeneratorLayers();
+          updateUrlFromState();
         });
 
         return div;
@@ -2123,6 +2297,22 @@
   }
 
   async function init() {
+    if (initialLayerEnabled(LAYER_CONTROL_IDS.generators, true)) {
+      layerGenerators.addTo(map);
+    }
+    if (initialLayerEnabled(LAYER_CONTROL_IDS.plannedGenerators, false)) {
+      layerPlannedGenerators.addTo(map);
+    }
+    if (initialLayerEnabled(LAYER_CONTROL_IDS.generation, false)) {
+      layerGeneration.addTo(map);
+    }
+    if (!initialLayerEnabled(LAYER_CONTROL_IDS.regions, true)) {
+      map.removeLayer(layerRegions);
+    }
+    if (!initialLayerEnabled(LAYER_CONTROL_IDS.transmission, true)) {
+      map.removeLayer(layerTransmission);
+    }
+
     cleanupOldDatasetCaches();
     await loadRegions();
     loadTransmission();
@@ -2139,6 +2329,7 @@
       if (event.type === 'overlayadd' || event.type === 'overlayremove') {
         updateLayerControlTitles();
         updateLegend();
+        updateUrlFromState();
       }
 
       if (event.type === 'overlayremove' && event.layer === layerGenerators) {
@@ -2172,6 +2363,10 @@
         refreshGeneratorLayers();
       }
 
+      if (event.type === 'zoomend' || event.type === 'moveend') {
+        updateUrlFromState();
+      }
+
       if (event.type === 'overlayadd' && event.layer === layerGeneration) {
         if (generationDataState === 'ready') {
           renderGenerationMixLayer();
@@ -2191,6 +2386,12 @@
         refreshGeneratorLayers();
       }
     });
+
+    window.addEventListener('hashchange', () => {
+      applyUrlState(parseUrlState());
+    });
+
+    updateUrlFromState();
 
   }
 
