@@ -791,7 +791,7 @@
         <div class="info-row"><span>Avg Demand</span><span>${formatNumber(dailyDemandMwh / 24 / 1000, 1)} GW</span></div>
         <div class="info-row"><span>Peak Demand</span><span>${formatNumber(gen.peakGw, 1)} GW</span></div>`;
       }
-      note = `Daily fuel mix, demand, and interchange from EIA Grid Monitor for ${daily.sourceLabel}. Mapping to this map's ISO/RTO regions is approximate.`;
+      note = `Daily fuel mix, demand, and interchange from EIA Grid Monitor for ${daily.sourceLabel}.`;
     } else if (gen) {
       detailRows = `<div class="info-row"><span>Annual Gen</span><span>${gen.totalTwh.toFixed(0)} TWh</span></div>
         <div class="info-row"><span>Avg Demand</span><span>${formatNumber(avgDemandGw, 1)} GW</span></div>
@@ -1089,6 +1089,7 @@
     }
 
     const geojson = topojson.feature(topology, topology.objects.states);
+    regionBoundsByIso.clear();
     regionFeatureEntries = geojson.features.map((feature) => {
       const fips = parseInt(feature.id, 10);
       const isoKey = FIPS_TO_ISO[fips] || 'OTHER';
@@ -1463,7 +1464,7 @@
       `<strong>${escapeHtml(plant.pn || 'Unnamed plant')}</strong><br>${escapeHtml(plant.dominantTech)} · ${formatNumber(plant.nmw, 1)} MW nameplate · ${formatNumber(plant.gc)} units`,
       { sticky: true, opacity: 0.95 }
     );
-    marker.bindPopup(buildGeneratorPopup(plant), { maxWidth: 420 });
+    marker.bindPopup(buildGeneratorPopup(plant), { maxWidth: 420, autoPan: false });
 
     return marker;
   }
@@ -2038,7 +2039,7 @@
       `<strong>${escapeHtml(record.pn || 'Unnamed plant')}</strong><br>${escapeHtml(record.dominantTech)} · ${formatNumber(record.mw, 1)} MW planned · ${formatNumber(record.projects)} units`,
       { sticky: true, opacity: 0.95 }
     );
-    marker.bindPopup(buildPlannedGeneratorPopup(record), { maxWidth: 460 });
+    marker.bindPopup(buildPlannedGeneratorPopup(record), { maxWidth: 460, autoPan: false });
 
     return marker;
   }
@@ -2158,11 +2159,12 @@
 
   function getLegendBodyHtml() {
     const sections = [];
+    const isoApproximationNote = 'ISO/RTO selector uses approximate state-based boundaries, not real ISO/RTO boundaries.';
 
     const isoRows = Object.entries(ISO_REGIONS)
       .filter(([key]) => key !== 'OTHER')
       .map(([key, region]) => `
-        <button type="button" class="legend-row legend-filter-row${selectedIsoFilter === key ? ' is-active' : ''}" data-iso-filter="${escapeHtml(key)}">
+        <button type="button" class="legend-row legend-filter-row${selectedIsoFilter === key ? ' is-active' : ''}" data-iso-filter="${escapeHtml(key)}" title="${escapeHtml(isoApproximationNote)}">
           <span class="legend-swatch" style="background:${region.color}"></span>
           <span>${escapeHtml(region.name)}</span>
         </button>
@@ -2170,8 +2172,8 @@
       .join('');
 
     sections.push(`
-      <h4>ISO / RTO SELECTOR</h4>
-      <button type="button" class="legend-row legend-filter-row${selectedIsoFilter === null ? ' is-active' : ''}" data-iso-filter="">
+      <h4 title="${escapeHtml(isoApproximationNote)}">ISO / RTO SELECTOR</h4>
+      <button type="button" class="legend-row legend-filter-row${selectedIsoFilter === null ? ' is-active' : ''}" data-iso-filter="" title="${escapeHtml(isoApproximationNote)}">
         <span class="legend-swatch" style="background:linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04))"></span>
         <span>All Regions</span>
       </button>
@@ -2573,4 +2575,3 @@
 
   init();
 })();
-
