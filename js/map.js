@@ -170,6 +170,8 @@
   let visibleGeneratorPlantsCacheKey = '';
   let visiblePlannedGeneratorPlantsCacheKey = '';
   let isApplyingUrlState = false;
+  let hasUserChangedMapView = false;
+  let hasFinishedInitialMapSetup = false;
 
   function parseUrlState() {
     const hash = window.location.hash.replace(/^#/, '').trim();
@@ -755,8 +757,20 @@
 
   const infoPanel = document.getElementById('info-panel');
   const infoContent = document.getElementById('info-content');
+  const header = document.getElementById('header');
   let generatorSummarySection = null;
   let generatorSummaryContent = null;
+
+  function updateHeaderVisibility() {
+    if (!header) return;
+    header.classList.toggle('hidden', hasUserChangedMapView || !hasDefaultViewState());
+  }
+
+  function markMapAsChanged() {
+    if (!hasFinishedInitialMapSetup || isApplyingUrlState) return;
+    hasUserChangedMapView = true;
+    updateHeaderVisibility();
+  }
 
   function showInfo(stateName, isoKey) {
     const region = ISO_REGIONS[isoKey] || ISO_REGIONS.OTHER;
@@ -1613,6 +1627,7 @@
   function updateUrlFromState() {
     if (isApplyingUrlState) return;
     updateResetButtonVisibility();
+    updateHeaderVisibility();
 
     if (hasDefaultViewState()) {
       if (window.location.hash) {
@@ -1653,6 +1668,21 @@
 
   function applyUrlState(state) {
     isApplyingUrlState = true;
+    hasUserChangedMapView = !(
+      Number(state.lat ?? DEFAULT_MAP_CENTER[0]) === DEFAULT_MAP_CENTER[0]
+      && Number(state.lng ?? DEFAULT_MAP_CENTER[1]) === DEFAULT_MAP_CENTER[1]
+      && Number(state.zoom ?? DEFAULT_MAP_ZOOM) === DEFAULT_MAP_ZOOM
+      && (!state.hasLayers || (
+        state.layers.has(LAYER_CONTROL_IDS.regions)
+        && state.layers.has(LAYER_CONTROL_IDS.transmission)
+        && state.layers.has(LAYER_CONTROL_IDS.generators)
+        && state.layers.size === 3
+      ))
+      && !state.iso
+      && (!Number.isFinite(state.minMw) || state.minMw === 0)
+      && (!Number.isFinite(state.maxMw) || state.maxMw === generatorMaxNameplateMw)
+      && (!state.hasTypes || state.types.size === generatorTypeOptions.length)
+    );
 
     selectedIsoFilter = state.iso || null;
     generatorFilterState = {
@@ -1701,6 +1731,7 @@
   }
 
   function resetMapToDefaultView() {
+    hasUserChangedMapView = false;
     applyUrlState({
       lat: DEFAULT_MAP_CENTER[0],
       lng: DEFAULT_MAP_CENTER[1],
@@ -2526,13 +2557,20 @@
       }
     });
 
+    map.on('movestart zoomstart', () => {
+      markMapAsChanged();
+    });
+
     window.addEventListener('hashchange', () => {
       applyUrlState(parseUrlState());
     });
 
+    hasFinishedInitialMapSetup = true;
     updateUrlFromState();
+    updateHeaderVisibility();
 
   }
 
   init();
 })();
+
