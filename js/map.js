@@ -758,8 +758,28 @@
   const infoPanel = document.getElementById('info-panel');
   const infoContent = document.getElementById('info-content');
   const header = document.getElementById('header');
+  const mapLoadingOverlay = document.getElementById('map-loading');
+  const mapLoadingText = document.getElementById('map-loading-text');
   let generatorSummarySection = null;
   let generatorSummaryContent = null;
+  let pendingMapLoadCount = 0;
+
+  function startMapLoading(message) {
+    pendingMapLoadCount += 1;
+    if (mapLoadingText && message) {
+      mapLoadingText.textContent = message;
+    }
+    if (mapLoadingOverlay) {
+      mapLoadingOverlay.classList.remove('hidden');
+    }
+  }
+
+  function finishMapLoading() {
+    pendingMapLoadCount = Math.max(0, pendingMapLoadCount - 1);
+    if (!pendingMapLoadCount && mapLoadingOverlay) {
+      mapLoadingOverlay.classList.add('hidden');
+    }
+  }
 
   function updateHeaderVisibility() {
     if (!header) return;
@@ -877,6 +897,7 @@
     if (generatorPlants.length) return Promise.resolve();
     if (generatorDatasetPromise) return generatorDatasetPromise;
 
+    startMapLoading('Rendering generator data...');
     generatorDatasetPromise = fetchCachedDatasetJson(GENERATOR_DATA_URL)
       .then((payload) => {
         generatorDataset = payload || { source: null, plants: [] };
@@ -886,6 +907,7 @@
       })
       .finally(() => {
         generatorDatasetPromise = null;
+        finishMapLoading();
       });
 
     return generatorDatasetPromise;
@@ -895,6 +917,7 @@
     if (plannedGeneratorPlants.length) return Promise.resolve();
     if (plannedGeneratorDatasetPromise) return plannedGeneratorDatasetPromise;
 
+    startMapLoading('Rendering planned generator data...');
     plannedGeneratorDatasetPromise = fetchCachedDatasetJson(PLANNED_GENERATOR_DATA_URL)
       .then((payload) => {
         plannedGeneratorDataset = payload || { source: null, plants: [] };
@@ -904,6 +927,7 @@
       })
       .finally(() => {
         plannedGeneratorDatasetPromise = null;
+        finishMapLoading();
       });
 
     return plannedGeneratorDatasetPromise;
@@ -1079,6 +1103,7 @@
 
   async function loadRegions() {
     let topology;
+    startMapLoading('Rendering region boundaries...');
 
     try {
       const res = await fetch(US_ATLAS_URL);
@@ -1086,6 +1111,8 @@
     } catch (err) {
       console.error('Failed to load US Atlas TopoJSON:', err);
       return;
+    } finally {
+      finishMapLoading();
     }
 
     const geojson = topojson.feature(topology, topology.objects.states);
@@ -1394,6 +1421,7 @@
     if (hifldTransmissionLoaded) return;
     if (hifldTransmissionLoadPromise) return hifldTransmissionLoadPromise;
 
+    startMapLoading('Rendering transmission data...');
     hifldTransmissionLoadPromise = (async () => {
       for (const chunkUrl of HIFLD_TRANSMISSION_CHUNKS) {
         const features = await fetchHifldChunkFeatures(chunkUrl);
@@ -1435,10 +1463,11 @@
 
       hifldTransmissionLoaded = true;
       renderHifldTransmission();
-      hifldTransmissionLoadPromise = null;
     })().catch((error) => {
-      hifldTransmissionLoadPromise = null;
       throw error;
+    }).finally(() => {
+      hifldTransmissionLoadPromise = null;
+      finishMapLoading();
     });
 
     return hifldTransmissionLoadPromise;

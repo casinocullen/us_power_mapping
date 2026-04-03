@@ -22,6 +22,55 @@ body {
   height: 100vh;
 }
 
+#map-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+
+#map-loading.hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.map-loading-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 220px;
+  padding: 12px 16px;
+  background: rgba(13, 17, 23, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px;
+  color: #f0f6fc;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  font-size: 12px;
+  letter-spacing: 0.2px;
+}
+
+.map-loading-spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(240, 246, 252, 0.18);
+  border-top-color: #58a6ff;
+  animation: map-loading-spin 0.85s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes map-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ============================================================
    Floating header
    ============================================================ */
@@ -70,7 +119,7 @@ body {
    ============================================================ */
 #info-panel {
   position: fixed;
-  top: calc(var(--panel-edge-gap) + var(--header-height) + var(--header-stack-gap));
+  top: var(--panel-edge-gap);
   left: var(--panel-edge-gap);
   bottom: auto;
   right: auto;
@@ -783,7 +832,7 @@ body {
     line-height: 1.35;
   }
   #info-panel {
-    top: calc(var(--panel-edge-gap) + var(--header-height) + var(--header-stack-gap));
+    top: var(--panel-edge-gap);
     left: var(--panel-edge-gap);
     bottom: auto;
     right: auto;
