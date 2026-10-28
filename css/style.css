@@ -22,6 +22,11 @@ body {
   height: 100vh;
 }
 
+/* Keep the basemap dark without changing overlay or control colors. */
+.basemap-tiles {
+  filter: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.8) contrast(0.9);
+}
+
 #map-loading {
   position: fixed;
   inset: 0;

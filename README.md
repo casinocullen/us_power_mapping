@@ -18,6 +18,7 @@ Interactive Leaflet.js map of the US electric power system.
 
 | Dataset | Source |
 |---|---|
+| Base map | OpenStreetMap standard raster tiles (no API key required), styled dark in CSS |
 | State boundaries | US Atlas TopoJSON (Census TIGER) |
 | Generation mix | EIA Grid Monitor / EIA-930 daily fuel mix API |
 | Generator plants | EIA 860M Preliminary Monthly Electric Generator Inventory, Operating tab |
@@ -32,6 +33,8 @@ Interactive Leaflet.js map of the US electric power system.
 > Generation mix updates automatically as EIA publishes each new previous-day daily mix.
 > A scheduled GitHub Actions workflow checks the EIA 860M release page each month, downloads the latest workbook, rebuilds both generator datasets, and pushes refreshed assets when a new release is available.
 > Boundaries do not reflect exact FERC-certified service territory lines.
+
+The base map uses `https://tile.openstreetmap.org/{z}/{x}/{y}.png` with visible OpenStreetMap attribution and normal browser caching. Follow the [OpenStreetMap tile usage policy](https://operations.osmfoundation.org/policies/tiles/); do not bulk-download or prefetch tiles for offline use. This replaces CARTO Dark Matter, which now requires an API key.
 
 ## Deployment
 
